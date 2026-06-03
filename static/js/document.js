@@ -90,7 +90,7 @@ import * as Modals from './modalManager.js';
   }
 
   async function _resolveComposeSendAccountId() {
-    const activeAccountId = window.__odysseusActiveEmailAccount || null;
+    const activeAccountId = window.__originActiveEmailAccount || null;
     if (!activeAccountId) return null;
     const accounts = await _getEmailAccountsCached();
     const activeAccount = accounts.find(a => String(a.id) === String(activeAccountId));
@@ -112,8 +112,8 @@ import * as Modals from './modalManager.js';
   let _lastSessionId = '';          // session context for "+" button
   const docs = new Map();           // docId -> { id, title, language, content, version, sessionId }
 
-  const _docOpenKey = (sessionId) => 'odysseus-doc-open-' + sessionId;
-  const _docMinimizedKey = (sessionId) => 'odysseus-doc-minimized-' + sessionId;
+  const _docOpenKey = (sessionId) => 'origin-doc-open-' + sessionId;
+  const _docMinimizedKey = (sessionId) => 'origin-doc-minimized-' + sessionId;
 
   function _markDocVisibleState(sessionId, state) {
     if (!sessionId) return;
@@ -2972,7 +2972,7 @@ import * as Modals from './modalManager.js';
           body_html: bodyHtml,
           in_reply_to: inReplyTo || null,
           references: references || null,
-          account_id: window.__odysseusActiveEmailAccount || null,
+          account_id: window.__originActiveEmailAccount || null,
         }),
       });
       const data = await res.json();
@@ -4339,7 +4339,7 @@ import * as Modals from './modalManager.js';
     const editorWrap = document.getElementById('doc-editor-wrap');
     const _fontSizes = ['s', 'm', 'l'];
     const _iconSizes = [12, 14, 16];
-    let _fontIdx = parseInt(localStorage.getItem('odysseus-doc-fontsize') || '0', 10);
+    let _fontIdx = parseInt(localStorage.getItem('origin-doc-fontsize') || '0', 10);
     if (!(_fontIdx >= 0 && _fontIdx < 3)) _fontIdx = 0;
     function _applyDocFont() {
       const richEmailBody = document.getElementById('doc-email-richbody');
@@ -4359,7 +4359,7 @@ import * as Modals from './modalManager.js';
           el.style.display = active ? '' : 'none';
         });
       }
-      localStorage.setItem('odysseus-doc-fontsize', _fontIdx);
+      localStorage.setItem('origin-doc-fontsize', _fontIdx);
     }
     _applyDocFont();
     // Click cycles through the sizes (S → M → L → S).
@@ -5271,7 +5271,7 @@ import * as Modals from './modalManager.js';
   }
 
   /** Collapse action buttons into overflow "..." menu (3 most-used visible) */
-  const _DOC_RECENTS_KEY = 'odysseus-doc-actions-recent';
+  const _DOC_RECENTS_KEY = 'origin-doc-actions-recent';
   const _DOC_MAX_VISIBLE = 2;
 
   function _getDocRecent() {
@@ -6529,16 +6529,16 @@ import * as Modals from './modalManager.js';
     if (!activeDocId) return;
     const data = _activeSuggestions.map(s => ({ id: s.id, find: s.find, replace: s.replace, reason: s.reason }));
     if (data.length) {
-      localStorage.setItem('odysseus-suggestions-' + activeDocId, JSON.stringify(data));
+      localStorage.setItem('origin-suggestions-' + activeDocId, JSON.stringify(data));
     } else {
-      localStorage.removeItem('odysseus-suggestions-' + activeDocId);
+      localStorage.removeItem('origin-suggestions-' + activeDocId);
     }
   }
 
   /** Restore suggestions from localStorage for a doc */
   function _restoreSuggestionsFromStorage(docId) {
     try {
-      const raw = localStorage.getItem('odysseus-suggestions-' + docId);
+      const raw = localStorage.getItem('origin-suggestions-' + docId);
       if (!raw) return;
       const data = JSON.parse(raw);
       if (!Array.isArray(data) || !data.length) return;
@@ -8119,12 +8119,18 @@ import * as Modals from './modalManager.js';
     const textarea = document.getElementById('doc-editor-textarea');
     if (!preview || !wrap || !textarea) return;
 
-    if (active) {
+      if (active) {
       const md = textarea.value || '';
       if (markdownModule && markdownModule.mdToHtml) {
         preview.innerHTML = markdownModule.mdToHtml(md);
       } else {
-        preview.innerHTML = md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g, '<br>');
+        preview.innerHTML = md
+          .replace(/&/g,'&amp;')
+          .replace(/</g,'&lt;')
+          .replace(/>/g,'&gt;')
+          .replace(/"/g,'&quot;')
+          .replace(/'/g,'&#39;')
+          .replace(/\n/g, '<br>');
       }
       if (window.hljs) {
         preview.querySelectorAll('pre code').forEach(b => window.hljs.highlightElement(b));
@@ -9074,14 +9080,14 @@ import * as Modals from './modalManager.js';
       }
 
       list.innerHTML = versions.map((v, i) => `
-        <div class="doc-version-item" data-version="${v.version_number}">
+        <div class="doc-version-item" data-version="${_escHtml(String(v.version_number))}">
           <div class="doc-version-info">
-            <span class="doc-version-num">v${v.version_number}</span>
-            ${i === 0 ? '<span class="doc-version-latest">latest</span>' : `<span class="doc-version-source">${v.source}</span><span class="doc-version-time">${v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span>`}
+            <span class="doc-version-num">v${_escHtml(String(v.version_number))}</span>
+            ${i === 0 ? '<span class="doc-version-latest">latest</span>' : `<span class="doc-version-source">${_escHtml(v.source || '')}</span><span class="doc-version-time">${v.created_at ? _escHtml(new Date(v.created_at).toLocaleString()) : ''}</span>`}
           </div>
-          ${v.summary ? `<div class="doc-version-summary">${v.summary}</div>` : ''}
-          ${diffs[i] ? `<div class="doc-version-diff">${diffs[i]}</div>` : ''}
-          ${i > 0 ? `<button class="doc-version-restore" data-version="${v.version_number}">Restore</button>` : ''}
+          ${v.summary ? `<div class="doc-version-summary">${_escHtml(v.summary)}</div>` : ''}
+          ${diffs[i] ? `<div class="doc-version-diff">${_escHtml(diffs[i])}</div>` : ''}
+          ${i > 0 ? `<button class="doc-version-restore" data-version="${_escHtml(String(v.version_number))}">Restore</button>` : ''}
         </div>
       `).join('');
 

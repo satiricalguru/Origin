@@ -18,7 +18,7 @@ let _abortControllers = [];
 let _mode = 'round-robin';    // 'parallel' or 'round-robin'
 let _roundRobinIdx = 0;
 let _parentSessionId = null;
-const GROUP_STATE_KEY = 'odysseus-group-state';
+const GROUP_STATE_KEY = 'origin-group-state';
 
 export function init(apiBase) {
   API_BASE = apiBase;
@@ -546,8 +546,8 @@ export async function startGroup(models, parentSessionId) {
     _parentSessionId = pdata.id;
     // Register as group session for sidebar icon
     try {
-      const gids = JSON.parse(localStorage.getItem('odysseus-group-sessions') || '[]');
-      if (!gids.includes(_parentSessionId)) { gids.push(_parentSessionId); localStorage.setItem('odysseus-group-sessions', JSON.stringify(gids)); }
+      const gids = JSON.parse(localStorage.getItem('origin-group-sessions') || '[]');
+      if (!gids.includes(_parentSessionId)) { gids.push(_parentSessionId); localStorage.setItem('origin-group-sessions', JSON.stringify(gids)); }
     } catch (e) {}
   } catch (e) {
     console.error('[group] Failed to create parent session:', e);
@@ -671,7 +671,7 @@ function _createGroupBubble(model, box) {
   // Role label — use character name if assigned, otherwise model name
   const roleLabel = model._groupName || (model.character ? model.character.characterName : chatRenderer.shortModel(model.mid));
   const roleTs = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  wrap.innerHTML = `<div class="role">${roleLabel} <span class="role-timestamp">${roleTs}</span></div><div class="body"></div>`;
+  wrap.innerHTML = `<div class="role">${uiModule.esc(roleLabel)} <span class="role-timestamp">${roleTs}</span></div><div class="body"></div>`;
   chatRenderer.applyModelColor(wrap.querySelector('.role'), model.mid);
 
   // Spinner — identical to chat.js line 3062
@@ -822,7 +822,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl) {
             );
             uiModule.scrollHistory();
           }
-          // Text delta (Odysseus format)
+          // Text delta (Origin format)
           else if (json.delta !== undefined) {
             if (_firstToken) { _firstToken = false; if (holderEl._spinner) { holderEl._spinner.destroy(); delete holderEl._spinner; } bodyEl.innerHTML = ''; }
             // Handle thinking tags from vLLM

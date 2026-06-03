@@ -129,6 +129,36 @@ class TestIdeRoutes:
         assert response.status_code == 403
         assert "forbidden" in response.json()["detail"].lower()
 
+    def test_security_rejects_system_paths(self, client, temp_workspace):
+        # System directories must be refused even when they exist
+        for forbidden in ("/", "/etc", "/var", "/usr", "/bin", "/sbin"):
+            response = client.post("/api/ide/workspace", json={"path": forbidden})
+            assert response.status_code == 400, f"expected 400 for {forbidden}, got {response.status_code}"
+            assert "system" in response.json()["detail"].lower()
+
+    def test_security_allows_per_user_temp_dirs(self, client, temp_workspace):
+        # macOS temp dirs (/var/folders, /private/var/folders) and /tmp are
+        # per-user scratch spaces — they must remain open so pytest's
+        # tempfile.mkdtemp() and similar tooling keep working. Regression
+        # guard: a previous version of set_workspace_root rejected these
+        # because their parent (/var or /private) is in the system deny
+        # list, which broke the test suite on macOS.
+        import tempfile
+        for label, factory in (
+            ("macOS /var/folders", lambda: tempfile.mkdtemp()),
+            ("Linux /tmp", lambda: tempfile.mkdtemp(prefix="t", dir="/tmp")),
+        ):
+            scratch = factory()
+            try:
+                response = client.post("/api/ide/workspace", json={"path": scratch})
+                assert response.status_code == 200, (
+                    f"{label}: expected 200 for {scratch}, got "
+                    f"{response.status_code} {response.text}"
+                )
+            finally:
+                import shutil
+                shutil.rmtree(scratch, ignore_errors=True)
+
     def test_git_log(self, client):
         response = client.get("/api/ide/git_log")
         assert response.status_code == 200

@@ -499,9 +499,16 @@ def setup_mcp_routes(mcp_manager: McpManager):
 
 def _oauth_authorize_page(auth_url: str, server_id: str, host: str) -> str:
     """Page with Google sign-in link and URL paste-back form for remote access."""
+    # `host` comes from the request Host header (attacker-controlled) and
+    # `auth_url` from the OAuth provider — escape both before interpolating
+    # into HTML attributes so a crafted Host or auth_url can't break out
+    # of the href/action context and inject markup.
+    safe_auth_url = html.escape(auth_url, quote=True)
+    safe_host = html.escape(host, quote=True)
+    safe_server_id = html.escape(server_id, quote=True)
     return f"""<!DOCTYPE html>
 <html><head>
-<meta charset="UTF-8"><title>Authorize — Odysseus</title>
+<meta charset="UTF-8"><title>Authorize — Origin</title>
 <style>
   body {{ font-family: 'Fira Code', monospace; background: #0f0f0f; color: #e0e0e0;
     display: flex; justify-content: center; align-items: center; min-height: 100vh; }}
@@ -539,9 +546,9 @@ def _oauth_authorize_page(auth_url: str, server_id: str, host: str) -> str:
     <b>3.</b> Copy the full URL from your browser's address bar<br>
     <b>4.</b> Paste it below and click Connect
   </div>
-  <a class="auth-link" href="{auth_url}" target="_blank" rel="noopener">Sign in with Google</a>
+  <a class="auth-link" href="{safe_auth_url}" target="_blank" rel="noopener">Sign in with Google</a>
   <div class="divider"></div>
-  <form method="POST" action="http://{host}/api/mcp/oauth/exchange/{server_id}">
+  <form method="POST" action="http://{safe_host}/api/mcp/oauth/exchange/{safe_server_id}">
     <p>Paste the URL from your browser after signing in:</p>
     <input type="text" name="callback_url" placeholder="http://localhost:7000/api/mcp/oauth/callback?code=..." required>
     <br><button type="submit">Connect</button>

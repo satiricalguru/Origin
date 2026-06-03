@@ -128,6 +128,7 @@ def setup_ide_routes() -> APIRouter:
             "/var/folders",               # macOS per-user temp dir
             "/private/var/folders",       # resolved symlink form
             "/tmp",                       # Linux/BSD per-user temp dir
+            "/private/tmp",               # resolved symlink form on macOS
         )
         for root in forbidden_roots:
             if target_str == root or target_str.startswith(root + os.sep):

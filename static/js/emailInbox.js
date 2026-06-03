@@ -10,8 +10,8 @@ import * as Modals from './modalManager.js';
 import { applyEdgeDock } from './modalSnap.js';
 
 const API_BASE = window.location.origin;
-const _acct = () => window.__odysseusActiveEmailAccount
-  ? `&account_id=${encodeURIComponent(window.__odysseusActiveEmailAccount)}`
+const _acct = () => window.__originActiveEmailAccount
+  ? `&account_id=${encodeURIComponent(window.__originActiveEmailAccount)}`
   : '';
 
 const _emailSetupHint = () => '<div style="margin-top:6px;opacity:0.72;font-size:11px;">Setup: <span style="color:var(--accent,var(--red));">Settings &rsaquo; Integrations</span></div>';
@@ -210,7 +210,7 @@ async function _refreshUnreadCount() {
     }
 
     // Compare highest unread UID to the last-seen threshold in localStorage
-    const lastSeen = parseInt(localStorage.getItem('odysseus-email-last-seen-uid') || '0', 10);
+    const lastSeen = parseInt(localStorage.getItem('origin-email-last-seen-uid') || '0', 10);
     const maxUid = Math.max(...emails.map(e => parseInt(e.uid, 10) || 0));
 
     // Only show dot if there's a new email above the threshold
@@ -245,7 +245,7 @@ export function markInboxAsSeen() {
         const emails = data.emails || [];
         if (emails.length > 0) {
           const maxUid = Math.max(...emails.map(e => parseInt(e.uid, 10) || 0));
-          localStorage.setItem('odysseus-email-last-seen-uid', String(maxUid));
+          localStorage.setItem('origin-email-last-seen-uid', String(maxUid));
         }
         const dot = document.getElementById('email-unread-dot');
         if (dot) dot.style.display = 'none';
@@ -293,7 +293,7 @@ export async function loadEmails(append = false) {
     if (_listSpinner) { _listSpinner.destroy(); _listSpinner = null; }
     if (!append && list) {
       const msg = e && e.message ? `Failed to load: ${e.message}` : 'Failed to load';
-      list.innerHTML = `<div class="email-loading">${msg.replace(/&/g, '&amp;').replace(/</g, '&lt;')}${_emailSetupHint()}</div>`;
+      list.innerHTML = `<div class="email-loading">${_esc(msg)}${_emailSetupHint()}</div>`;
     }
   } finally {
     _loading = false;

@@ -34,6 +34,83 @@ function linkHtml(text, url) {
   return `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${safeText}</a>`;
 }
 
+// Sanitize the inside of a <details> block before re-inserting it. The
+// only thing we want to preserve verbatim is the <summary> element (and
+// its text content). All other element children are dropped — their text
+// content is escaped and re-emitted as text so a payload like
+// `<details><img src=x onerror=alert(1)>x</details>` renders as the
+// harmless string "<img src=x onerror=alert(1)>x" rather than executing
+// the inline handler. The outer <details> is always emitted in the open
+// state so the agent output stays visible by default.
+function _sanitizeDetailsBlock(raw) {
+  const opened = raw.replace(/<details>/i, '<details open>');
+  let parsed;
+  try {
+    parsed = new DOMParser().parseFromString(opened, 'text/html');
+  } catch (_) {
+    // Malformed input — return the opened tag with the raw inside
+    // escaped by the general `& < >` pass later, but we have to drop
+    // the inner content entirely here to avoid letting an unparseable
+    // payload through.
+    return '<details open></details>';
+  }
+  const det = parsed.querySelector('details');
+  if (!det) return '<details open></details>';
+
+  // Walk children: keep <summary> verbatim (sanitizing its own contents
+  // the same way), drop every other element, and escape any text nodes.
+  const out = document.createElement('details');
+  out.setAttribute('open', '');
+  Array.from(det.childNodes).forEach((node) => {
+    if (node.nodeType === 1 /* Element */) {
+      if (node.tagName.toLowerCase() === 'summary') {
+        // Sanitize the summary the same way: keep its text content only.
+        const sum = document.createElement('summary');
+        Array.from(node.childNodes).forEach((c) => {
+          if (c.nodeType === 3 /* Text */) {
+            sum.appendChild(document.createTextNode(c.nodeValue || ''));
+          } else if (c.nodeType === 1 && c.tagName.toLowerCase() === 'summary') {
+            // Nested summary: flatten by recursing one level.
+            Array.from(c.childNodes).forEach((cc) => {
+              if (cc.nodeType === 3) sum.appendChild(document.createTextNode(cc.nodeValue || ''));
+            });
+          }
+          // Any other element type inside <summary> is dropped.
+        });
+        out.appendChild(sum);
+      }
+      // Any other element type is dropped (its text is NOT preserved as
+      // HTML — we want a malicious payload to disappear entirely).
+    } else if (node.nodeType === 3 /* Text */) {
+      out.appendChild(document.createTextNode(node.nodeValue || ''));
+    }
+  });
+  return out.outerHTML;
+}
+
+// Sanitize a <a>...</a> block by re-parsing it and keeping only a
+// safe set of attributes (href, target, rel) — everything else, and
+// especially any on* event handler, is dropped. The href is run through
+// safeLinkUrl() to reject javascript: and other non-http(s) schemes.
+function _sanitizeAnchorBlock(raw) {
+  let parsed;
+  try {
+    parsed = new DOMParser().parseFromString(`<div>${raw}</div>`, 'text/html');
+  } catch (_) {
+    return '';
+  }
+  const a = parsed.querySelector('a');
+  if (!a) return '';
+  const hrefAttr = a.getAttribute('href') || '';
+  const safeHref = safeLinkUrl(hrefAttr);
+  if (!safeHref) return '';
+  const text = a.textContent || '';
+  if (safeHref.startsWith('#')) {
+    return `<a href="${safeHref}" class="chat-link">${escapeHtml(text)}</a>`;
+  }
+  return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
+}
+
 /**
  * Check if text has unclosed think tag
  */
@@ -352,18 +429,26 @@ export function mdToHtml(src) {
     }
   );
 
-  // Extract <details>...</details> blocks and replace with placeholders
-  // Default to open so agent output is visible
+  // Extract <details>...</details> blocks and replace with placeholders.
+  // Default to open so agent output is visible. We sanitize the inner
+  // content via DOMParser so a hostile payload like
+  // `<details><img src=x onerror=alert(1)></details>` can't carry live
+  // script into the page — only <summary> tags and escaped text are
+  // preserved, everything else is rendered as text or dropped.
   s = s.replace(/<details>([\s\S]*?)<\/details>/gi, (match) => {
+    const safe = _sanitizeDetailsBlock(match);
     const placeholder = `___ALLOWED_HTML_${allowedHtmlBlocks.length}___`;
-    allowedHtmlBlocks.push(match.replace(/<details>/i, '<details open>'));
+    allowedHtmlBlocks.push(safe);
     return placeholder;
   });
 
-  // ALSO preserve <a> tags the same way (they're now in the HTML from markdown conversion)
-  s = s.replace(/<a\s+[^>]*>.*?<\/a>/gi, (match) => {
+  // Preserve <a> tags the same way (they're produced by linkHtml() with
+  // a safe href), but route every extracted <a> through the same sanitizer
+  // so a user-supplied `<a onclick=...>` can't sneak inline handlers in.
+  s = s.replace(/<a\s+[^>]*>[\s\S]*?<\/a>/gi, (match) => {
+    const safe = _sanitizeAnchorBlock(match);
     const placeholder = `___ALLOWED_HTML_${allowedHtmlBlocks.length}___`;
-    allowedHtmlBlocks.push(match);
+    allowedHtmlBlocks.push(safe);
     return placeholder;
   });
 
@@ -610,11 +695,11 @@ export default markdownModule;
 
 // Mermaid is loaded async so it cannot delay the app shell.
 function initMermaid() {
-  if (!window.mermaid || window.__odysseusMermaidReady) return;
+  if (!window.mermaid || window.__originMermaidReady) return;
   window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
-  window.__odysseusMermaidReady = true;
+  window.__originMermaidReady = true;
 }
-window.odysseusInitMermaid = initMermaid;
+window.originInitMermaid = initMermaid;
 initMermaid();
 
 // Persist which thinking sections were expanded across page refreshes.
@@ -622,7 +707,7 @@ initMermaid();
 // the inner text content instead — same content reproduces the same hash on
 // reload. LocalStorage holds a Set of expanded hashes; we observe the chat
 // history and re-expand matching sections as they're inserted.
-const THINK_EXPANDED_KEY = 'odysseus-thinking-expanded';
+const THINK_EXPANDED_KEY = 'origin-thinking-expanded';
 function _loadExpandedSet() {
   try { return new Set(JSON.parse(localStorage.getItem(THINK_EXPANDED_KEY) || '[]')); }
   catch { return new Set(); }

@@ -38,6 +38,8 @@ A full hover-to-play tour lives on the landing page at [`docs/index.html`](docs/
 
 <details>
 <summary>📸 Screenshots & Clips</summary>
+  <img width="2918" height="1518" alt="image" src="https://github.com/user-attachments/assets/93920933-b4f2-4636-9086-d56c3d9c0ea4" />
+
 <br/>
 
 | Chat & Agents | Deep Research |

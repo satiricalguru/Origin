@@ -21,7 +21,7 @@ const SIDEBAR_MAX_VISIBLE = 10;
 const FOLDER_MAX_VISIBLE = 5;
 let _showAllSessions = false;
 let _expandedFolders = {};  // folderName -> true if "show more" clicked
-let _sortMode = Storage.get('odysseus-session-sort') || 'active'; // default to last active
+let _sortMode = Storage.get('origin-session-sort') || 'active'; // default to last active
 let _autoCreateInProgress = false; // guard against recursive auto-create
 const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key for incognito session IDs
 const _isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -62,7 +62,7 @@ function _deselectCurrentSession(sid) {
   if (currentSessionId !== sid) return;
   currentSessionId = null;
   uiModule.el('chat-history').innerHTML = '';
-  uiModule.el('current-meta').textContent = 'Odysseus Chat';
+  uiModule.el('current-meta').textContent = 'Origin Chat';
   Storage.remove('lastSessionId');
   history.replaceState(null, '', window.location.pathname);
   if (window.chatModule && window.chatModule.showWelcomeScreen) {
@@ -82,8 +82,8 @@ function _deselectCurrentSession(sid) {
 export function initDependencies() {}
 
 // ── Folder state persistence ──
-const FOLDER_STATE_KEY = 'odysseus-folder-state';
-const FOLDER_ORDER_KEY = 'odysseus-folder-order';
+const FOLDER_STATE_KEY = 'origin-folder-state';
+const FOLDER_ORDER_KEY = 'origin-folder-order';
 
 function loadFolderState() {
   return Storage.getJSON(FOLDER_STATE_KEY, {});
@@ -1302,6 +1302,17 @@ function _animateSessionRowsRemoving(ids, selector) {
   return new Promise(resolve => setTimeout(resolve, 520));
 }
 
+async function fetchWithTimeout(url, opts = {}, timeout = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...opts, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function loadSessions() {
   try {
     // Delete incognito sessions left over from a previous page load
@@ -1314,7 +1325,7 @@ export async function loadSessions() {
       sessionStorage.removeItem('ody-prefetch-sessions');
       fetched = JSON.parse(prefetched);
     } else {
-      const res = await fetch(`${API_BASE}/api/sessions`);
+      const res = await fetchWithTimeout(`${API_BASE}/api/sessions`, { credentials: 'same-origin' }, 12000);
       fetched = await res.json();
     }
     sessions = fetched;
@@ -1387,7 +1398,7 @@ export async function loadSessions() {
       sessionStorage.setItem('ody-session-active', '1');
       if (!targetId) {
         try {
-          const dcRes = await fetch(`${API_BASE}/api/default-chat`);
+          const dcRes = await fetchWithTimeout(`${API_BASE}/api/default-chat`, { credentials: 'same-origin' }, 12000);
           const dc = await dcRes.json();
           if (dc.endpoint_url && dc.model) {
             // Check if there's already an empty session with this model we can reuse
@@ -1434,7 +1445,7 @@ export async function loadSessions() {
       if (activeSessions.length === 0 && !_autoCreateInProgress) {
         _autoCreateInProgress = true;
         try {
-          const dcRes = await fetch(`${API_BASE}/api/default-chat`);
+          const dcRes = await fetchWithTimeout(`${API_BASE}/api/default-chat`, { credentials: 'same-origin' }, 12000);
           const dc = await dcRes.json();
           if (dc.endpoint_url && dc.model) {
             await createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
@@ -1467,7 +1478,7 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
     currentSessionId = id;
     // Identify Assistant / task-output sessions so we don't "trap" the user
     // there on return. Skipped from both `lastSessionId` persistence and the
-    // URL hash — the user complained that coming back to Odysseus kept
+    // URL hash — the user complained that coming back to Origin kept
     // landing them on the auto-firing task-log chat instead of their last
     // real conversation.
     const _meta = sessions.find(s => s.id === id);
@@ -1534,7 +1545,7 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
 
     const currentMetaEl = uiModule.el('current-meta');
     if (currentMetaEl) {
-      currentMetaEl.textContent = meta ? meta.name : 'Odysseus Chat';
+      currentMetaEl.textContent = meta ? meta.name : 'Origin Chat';
     }
     // Update model picker visibility
     updateModelPicker();
@@ -1675,7 +1686,7 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
     if (window.documentModule) {
       const docBtn = document.getElementById('overflow-doc-btn');
       const meta = sessions.find(s => s.id === id);
-      const shouldOpen = localStorage.getItem('odysseus-doc-open-' + id) === '1';
+      const shouldOpen = localStorage.getItem('origin-doc-open-' + id) === '1';
       const hasDocs = !!(meta && meta.has_documents);
       if (docBtn) {
         docBtn.classList.remove('active');
@@ -3009,8 +3020,8 @@ export function closeArchive() {
 export function getSortMode() { return _sortMode; }
 export function setSortMode(mode) {
   _sortMode = mode || null;
-  if (mode) Storage.set('odysseus-session-sort', mode);
-  else Storage.remove('odysseus-session-sort');
+  if (mode) Storage.set('origin-session-sort', mode);
+  else Storage.remove('origin-session-sort');
   renderSessionList();
 }
 

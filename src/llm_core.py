@@ -231,8 +231,8 @@ def _provider_headers(provider: str, headers: Optional[Dict] = None) -> Dict[str
     if isinstance(headers, dict):
         h.update(headers)
     if provider == "openrouter":
-        h.setdefault("HTTP-Referer", "https://github.com/pewdiepie-archdaemon/odysseus")
-        h.setdefault("X-OpenRouter-Title", "Odysseus")
+        h.setdefault("HTTP-Referer", "https://github.com/satiricalguru/Origin")
+        h.setdefault("X-OpenRouter-Title", "Origin")
     return h
 
 
@@ -250,6 +250,7 @@ def _provider_label(url: str) -> str:
     if "googleapis.com" in u or "generativelanguage" in u: return "Google"
     if "together.xyz" in u or "together.ai" in u: return "Together"
     if "fireworks.ai" in u: return "Fireworks"
+    if "nvidia.com" in u: return "NVIDIA"
     if "ollama" in u or ":11434" in u: return "Ollama"
     if "localhost" in u or "127.0.0.1" in u: return "local endpoint"
     try:
@@ -449,7 +450,7 @@ def _parse_anthropic_response(data: dict) -> str:
 
 
 def _sanitize_llm_messages(messages: List[Dict]) -> List[Dict]:
-    """Strip Odysseus-only metadata before sending messages to providers."""
+    """Strip Origin-only metadata before sending messages to providers."""
     allowed = {"role", "content", "name", "tool_call_id", "tool_calls", "function_call"}
     cleaned = []
     for msg in messages or []:

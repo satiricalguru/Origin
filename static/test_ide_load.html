@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>IDE Module Test</title>
+<style>body{background:#1e1e1e;color:#ccc;font-family:sans-serif;padding:20px}
+#o{white-space:pre-wrap;font-family:monospace;margin-top:20px}
+.e{color:#f44}.s{color:#4f4}</style>
+</head><body>
+<h2>IDE Module Load Test</h2>
+<p>Testing dynamic import of ide.js...</p>
+<div id="o"></div>
+<script type="module">
+const o = document.getElementById('o');
+function log(m, c=''){o.innerHTML+=`<div class="${c}">${m}</div>`}
+log('Starting...');
+try {
+    const mod = await import('./js/ide.js');
+    log('Module LOADED','s');
+    const d = mod.default||{};
+    for(const k of ['open','close','openFile','saveCurrentFile','runCurrentFile']){
+        log(`default.${k}: ${typeof d[k]}`, typeof d[k]==='function'?'s':'e');
+    }
+}catch(e){
+    log(`FAILED: ${e.message}`,'e');
+    log(`Stack: ${(e.stack||'').split('\\n').slice(0,4).join('\\n')}`,'e');
+}
+log('Done!');
+</script></body></html>

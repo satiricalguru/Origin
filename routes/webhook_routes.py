@@ -159,6 +159,7 @@ def setup_webhook_routes(
         "openrouter": "https://openrouter.ai/api/v1",
         "ollama": "https://ollama.com/api",
         "fireworks": "https://api.fireworks.ai/inference/v1",
+        "nvidia": "https://integrate.api.nvidia.com/v1",
     }
 
     # Model prefix → provider mapping for auto-detection
@@ -171,6 +172,8 @@ def setup_webhook_routes(
         "mistral": "mistral",
         "llama": "groq",
         "mixtral": "groq",
+        "nvidia/": "nvidia",
+        "nemotron": "nvidia",
     }
 
     def _resolve_base_url(model: Optional[str], provider: Optional[str]) -> Optional[str]:

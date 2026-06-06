@@ -60,7 +60,7 @@ class McpManager:
             server_params = StdioServerParameters(
                 command=command,
                 args=args,
-                env={**os.environ, **env} if env else None,
+                env={k: v for k, v in os.environ.items() if k in {"PATH", "HOME", "PYTHONPATH", "VIRTUAL_ENV", "CONDA_PREFIX", "USER", "LANG", "LC_ALL", "TMPDIR", "TEMP", "SHELL"}} | (env or {}),
             )
 
             stack = AsyncExitStack()

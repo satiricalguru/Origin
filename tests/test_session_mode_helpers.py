@@ -17,9 +17,24 @@ pattern.
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from unittest.mock import MagicMock
+import sys
+import importlib
 
+# Pop any stubbed/mocked versions of core.database or sqlalchemy to load real implementations
+for mod in list(sys.modules.keys()):
+    if mod == "core.database" or mod.startswith("sqlalchemy"):
+        sys.modules.pop(mod, None)
+
+# Also remove the database attribute from the core parent module if it exists
+if "core" in sys.modules:
+    core_mod = sys.modules["core"]
+    if hasattr(core_mod, "database"):
+        delattr(core_mod, "database")
+
+from unittest.mock import MagicMock
 from core import database as db
+
+
 
 
 def _mock_session(monkeypatch):

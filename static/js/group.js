@@ -767,7 +767,7 @@ async function _syncAllResponses(holders) {
             content: `[${model._groupName || model.display}]: ${response}`
           }]}),
         });
-      } catch (e) { /* silent */ }
+      } catch (e) { console.warn('[group] _streamToHolder inject_messages failed:', e); }
     }
   }
 }
@@ -902,7 +902,7 @@ async function _streamToHolder(modelIdx, sessionId, msg, holderEl, abortCtrl) {
         role: 'assistant', content: accumulated,
         metadata: { group_model: gName, model: _models[modelIdx].mid }
       }]}),
-    }).catch(() => {});
+    }).catch(e => { console.warn('[group] inject accumulated response failed:', e); });
   }
 }
 
@@ -918,8 +918,8 @@ function _saveState() {
       parentSessionId: _parentSessionId,
       roundRobinIdx: _roundRobinIdx,
     }));
-  } catch (e) {}
-}
+      } catch (e) { console.warn('[group] save preset groups failed:', e); }
+    }
 
 export function restoreState(sessionId) {
   try {

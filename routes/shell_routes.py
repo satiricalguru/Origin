@@ -79,7 +79,7 @@ def _find_line_break(buf):
 EXEC_TIMEOUT = 30  # seconds — shorter than agent's 60s
 STREAM_TIMEOUT = 120  # default for short commands
 MAX_OUTPUT = 200_000  # truncate limit
-TMUX_LOG_DIR = Path(tempfile.gettempdir()) / "odysseus-tmux"
+TMUX_LOG_DIR = Path(tempfile.gettempdir()) / "origin-tmux"
 PTY_UNSUPPORTED_ERROR = "pty_unsupported"
 
 
@@ -89,6 +89,14 @@ class ShellExecRequest(BaseModel):
     use_pty: bool = False       # use pseudo-TTY (for progress bars)
     use_tmux: bool = False      # run in tmux session (survives browser disconnect)
 
+
+def _get_exec_cwd() -> str:
+    """Retrieve active workspace path or default to home directory."""
+    try:
+        from routes.ide_routes import get_active_workspace_path
+        return str(get_active_workspace_path())
+    except ImportError:
+        return str(Path.home())
 
 async def _create_shell(command: str, **kwargs):
     """Spawn a shell subprocess for `command`.
@@ -112,7 +120,7 @@ async def _exec_shell(command: str, timeout: int = EXEC_TIMEOUT) -> Dict[str, An
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(Path.home()),
+            cwd=_get_exec_cwd(),
         )
         stdout_b, stderr_b = await asyncio.wait_for(
             proc.communicate(), timeout=timeout
@@ -154,7 +162,7 @@ async def _generate_pty(cmd: str, timeout: int, request: Request):
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
-        cwd=str(Path.home()),
+        cwd=_get_exec_cwd(),
         preexec_fn=os.setsid,
     )
     os.close(slave_fd)  # parent doesn't need the slave side
@@ -285,10 +293,10 @@ async def _generate_tmux(cmd: str, request: Request):
     script_path = TMUX_LOG_DIR / f"{session_id}.sh"
     script_path.write_text(
         f"#!/bin/bash\n"
-        f"ODYSSEUS_USER_SHELL=\"${{SHELL:-}}\"\n"
-        f"if [ -n \"$ODYSSEUS_USER_SHELL\" ] && [ -x \"$ODYSSEUS_USER_SHELL\" ]; then\n"
-        f"  ODYSSEUS_USER_PATH=\"$(\"$ODYSSEUS_USER_SHELL\" -ic 'printf \"__ODYSSEUS_PATH__%s\\n\" \"$PATH\"' 2>/dev/null | sed -n 's/^__ODYSSEUS_PATH__//p' | tail -n 1 || true)\"\n"
-        f"  if [ -n \"$ODYSSEUS_USER_PATH\" ]; then export PATH=\"$ODYSSEUS_USER_PATH:$PATH\"; fi\n"
+        f"ORIGIN_USER_SHELL=\"${{SHELL:-}}\"\n"
+        f"if [ -n \"$ORIGIN_USER_SHELL\" ] && [ -x \"$ORIGIN_USER_SHELL\" ]; then\n"
+        f"  ORIGIN_USER_PATH=\"$(\"$ORIGIN_USER_SHELL\" -ic 'printf \"__ORIGIN_PATH__%s\\n\" \"$PATH\"' 2>/dev/null | sed -n 's/^__ORIGIN_PATH__//p' | tail -n 1 || true)\"\n"
+        f"  if [ -n \"$ORIGIN_USER_PATH\" ]; then export PATH=\"$ORIGIN_USER_PATH:$PATH\"; fi\n"
         f"fi\n"
         f"{cmd} 2>&1 | tee '{log_path}'\n"
         f"EC=${{PIPESTATUS[0]}}\n"
@@ -468,8 +476,119 @@ async def _generate_win_detached(cmd: str, request: Request):
             pass
 
 
+class SessionExecRequest(BaseModel):
+    command: str
+
+
+class PersistentShellSession:
+    def __init__(self, session_id: str, cwd: str):
+        self.session_id = session_id
+        self.cwd = cwd
+        self.proc = None
+        self.sentinel = f"___CMD_DONE_{uuid.uuid4().hex}___"
+
+    async def start(self):
+        from core.platform_compat import find_bash, IS_WINDOWS
+        # Use zsh/bash on macOS, bash/cmd on Windows
+        shell_path = "/bin/zsh" if (not IS_WINDOWS and os.path.exists("/bin/zsh")) else "/bin/bash"
+        if IS_WINDOWS:
+            shell_path = find_bash() or "cmd.exe"
+        
+        args = []
+        if not IS_WINDOWS:
+            args = ["-l"]
+        else:
+            args = ["/Q"]
+
+        self.proc = await asyncio.create_subprocess_exec(
+            shell_path,
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=self.cwd,
+        )
+        
+        # Write the sentinel first to clean out shell startup noise
+        payload = f"echo {self.sentinel}\n"
+        self.proc.stdin.write(payload.encode())
+        await self.proc.stdin.drain()
+        
+        try:
+            while True:
+                line_bytes = await asyncio.wait_for(self.proc.stdout.readline(), timeout=5.0)
+                if not line_bytes:
+                    break
+                line = line_bytes.decode(errors="replace")
+                if self.sentinel in line:
+                    break
+        except asyncio.TimeoutError:
+            pass
+
+    async def execute(self, command: str, timeout: float = 30.0) -> str:
+        if not self.proc or self.proc.returncode is not None:
+            await self.start()
+            
+        payload = f"{command}\necho {self.sentinel}\n"
+        self.proc.stdin.write(payload.encode())
+        await self.proc.stdin.drain()
+        
+        output_lines = []
+        try:
+            while True:
+                line_bytes = await asyncio.wait_for(self.proc.stdout.readline(), timeout=timeout)
+                if not line_bytes:
+                    break
+                line = line_bytes.decode(errors="replace")
+                if self.sentinel in line:
+                    break
+                output_lines.append(line)
+        except asyncio.TimeoutError:
+            output_lines.append("\n[Command execution timed out or waiting for input...]\n")
+            
+        return "".join(output_lines)
+
+    async def stop(self):
+        if self.proc:
+            try:
+                self.proc.kill()
+                await self.proc.wait()
+            except ProcessLookupError:
+                pass
+
+
+SHELL_SESSIONS: Dict[str, PersistentShellSession] = {}
+
+
 def setup_shell_routes() -> APIRouter:
     router = APIRouter(tags=["shell"])
+
+    @router.post("/api/shell/session")
+    async def create_shell_session(request: Request) -> Dict[str, Any]:
+        _require_admin(request)
+        session_id = str(uuid.uuid4())
+        cwd = _get_exec_cwd()
+        session = PersistentShellSession(session_id, cwd)
+        await session.start()
+        SHELL_SESSIONS[session_id] = session
+        return {"session_id": session_id}
+
+    @router.post("/api/shell/session/{session_id}/exec")
+    async def exec_shell_session_command(request: Request, session_id: str, req: SessionExecRequest) -> Dict[str, Any]:
+        _require_admin(request)
+        if session_id not in SHELL_SESSIONS:
+            cwd = _get_exec_cwd()
+            session = PersistentShellSession(session_id, cwd)
+            await session.start()
+            SHELL_SESSIONS[session_id] = session
+        
+        session = SHELL_SESSIONS[session_id]
+        output = await session.execute(req.command)
+        return {
+            "stdout": output,
+            "stderr": "",
+            "exit_code": 0
+        }
 
     @router.post("/api/shell/exec")
     async def shell_exec(request: Request, req: ShellExecRequest) -> Dict[str, Any]:
@@ -527,7 +646,7 @@ def setup_shell_routes() -> APIRouter:
                     cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=str(Path.home()),
+                    cwd=_get_exec_cwd(),
                 )
 
                 q: asyncio.Queue = asyncio.Queue()

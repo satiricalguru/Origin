@@ -2,7 +2,7 @@
 import re
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Form, HTTPException, Response, Request
 import logging
 
@@ -61,7 +61,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
     SESSIONS_FILE = config.get("SESSIONS_FILE")
     
     @router.get("/sessions")
-    def list_sessions(request: Request):
+    def list_sessions(request: Request, include_system: bool = False):
         user = get_current_user(request)
         # Lazy purge: incognito sessions are ephemeral by design — wipe leftovers
         # from the DB and session_manager so they vanish on the next page refresh.
@@ -73,8 +73,8 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         # purge exists only to catch ghosts the frontend missed (tab close,
         # crash). Only clean up rows old enough to be definitely orphaned.
         try:
-            from datetime import datetime as _dt, timedelta as _td
-            _cutoff = _dt.utcnow() - _td(minutes=10)
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            _cutoff = _dt.now(_tz.utc).replace(tzinfo=None) - _td(minutes=10)
             _purge_db = SessionLocal()
             try:
                 from core.database import ChatMessage as _DbMsg
@@ -155,7 +155,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                      "message_count": msg_count_map.get(s.id, 0)}
                     for s in user_sessions.values()
                     if not s.archived
-                    and (s.name or "").strip() not in ("Nobody", "Incognito")]
+                    and (include_system or (s.name or "").strip() not in ("Nobody", "Incognito", "[IDE] Workspace Copilot"))]
 
         return sessions
     
@@ -215,16 +215,6 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                                         f"Model not found at server. Available: {', '.join(avail)}")
                 model_to_use = found
         
-        sid = str(uuid.uuid4())
-        user = get_current_user(request)
-        session = session_manager.create_session(
-            session_id=sid,
-            name=name or "",
-            endpoint_url=endpoint_url or "",
-            model=model_to_use,
-            rag=str(rag).lower() == "true" if rag else False,
-            owner=user,
-        )
         # Set auth headers for custom API-key endpoints
         resolved_key = api_key.strip() if api_key else ""
         resolved_base = endpoint_url
@@ -238,10 +228,22 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                     resolved_base = ep.base_url
             finally:
                 _db.close()
+        resolved_headers = {}
         if resolved_key:
             from src.endpoint_resolver import build_headers
-            session.headers = build_headers(resolved_key, resolved_base)
-            session_manager.save_sessions()
+            resolved_headers = build_headers(resolved_key, resolved_base)
+
+        sid = str(uuid.uuid4())
+        user = get_current_user(request)
+        session = session_manager.create_session(
+            session_id=sid,
+            name=name or "",
+            endpoint_url=endpoint_url or "",
+            model=model_to_use,
+            rag=str(rag).lower() == "true" if rag else False,
+            owner=user,
+            headers=resolved_headers,
+        )
         # Fire webhook (sync-safe)
         if webhook_manager:
             webhook_manager.fire_and_forget("session.created", {
@@ -280,7 +282,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                 db_session = db.query(DbSession).filter(DbSession.id == sid).first()
                 if db_session:
                     db_session.folder = folder if folder else None
-                    db_session.updated_at = datetime.utcnow()
+                    db_session.updated_at = datetime.now(timezone.utc)
                     db.commit()
                     result["folder"] = folder if folder else None
             finally:
@@ -299,15 +301,17 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             session.model = model
             session.endpoint_url = endpoint_url
             # Update auth headers from the endpoint's stored API key
+            new_headers = {}
             if endpoint_id:
                 _db = SessionLocal()
                 try:
                     ep = _db.query(ModelEndpoint).filter(ModelEndpoint.id == endpoint_id).first()
                     if ep and ep.api_key:
                         from src.endpoint_resolver import build_headers
-                        session.headers = build_headers(ep.api_key, ep.base_url)
+                        new_headers = build_headers(ep.api_key, ep.base_url)
                 finally:
                     _db.close()
+            session.headers = new_headers
             # Persist to DB
             db = SessionLocal()
             try:
@@ -315,7 +319,8 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                 if db_session:
                     db_session.model = model
                     db_session.endpoint_url = endpoint_url
-                    db_session.updated_at = datetime.utcnow()
+                    db_session.headers = new_headers
+                    db_session.updated_at = datetime.now(timezone.utc)
                     db.commit()
             finally:
                 db.close()
@@ -441,7 +446,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                 db_session = db.query(DbSession).filter(DbSession.id == sid).first()
                 if db_session:
                     db_session.archived = True
-                    db_session.updated_at = datetime.utcnow()
+                    db_session.updated_at = datetime.now(timezone.utc)
                     db.commit()
                     
                     # Update in memory if it exists
@@ -475,7 +480,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             if not db_session:
                 raise HTTPException(404, f"Session {sid} not found")
             db_session.archived = False
-            db_session.updated_at = datetime.utcnow()
+            db_session.updated_at = datetime.now(timezone.utc)
             db.commit()
             # Reload into session manager so it appears in the active list
             try:
@@ -678,7 +683,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                 db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
                 if db_session:
                     db_session.is_important = important
-                    db_session.updated_at = datetime.utcnow()
+                    db_session.updated_at = datetime.now(timezone.utc)
                     db.commit()
 
                     # Update in memory if it exists
@@ -765,7 +770,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             metadata={
                 "compacted": True,
                 "summarized_count": len(older),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
         new_history = [summary_msg] + recent
@@ -1028,7 +1033,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                 db_session = db.query(DbSession).filter(DbSession.id == sid, DbSession.owner == user).first()
                 if db_session:
                     db_session.folder = folder_name
-                    db_session.updated_at = datetime.utcnow()
+                    db_session.updated_at = datetime.now(timezone.utc)
                     updated += 1
             db.commit()
         except Exception as e:

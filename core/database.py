@@ -1,25 +1,28 @@
 import os
 import logging
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Text, Boolean, DateTime, Integer, ForeignKey, JSON, Index, func, text
 from sqlalchemy.types import TypeDecorator
-from sqlalchemy.ext.declarative import declarative_base, declared_attr
-from sqlalchemy.orm import relationship, sessionmaker, backref
+from sqlalchemy.orm import declarative_base, declared_attr, relationship, sessionmaker, backref
 
 logger = logging.getLogger(__name__)
 
 # Create base class for declarative models
 Base = declarative_base()
 
+def _utcnow():
+    return datetime.now(timezone.utc)
+
 class TimestampMixin:
     """Mixin that adds timestamp fields to models"""
     @declared_attr
     def created_at(cls):
-        return Column(DateTime, default=datetime.utcnow, nullable=False)
+        return Column(DateTime, default=_utcnow, nullable=False)
     
     @declared_attr
     def updated_at(cls):
-        return Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+        return Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
 # Get database URL from environment, default to SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
@@ -157,7 +160,7 @@ class ChatMessage(Base):
     meta_data = Column("metadata", Text, nullable=True)  # JSON string for metrics etc.
 
     # Timestamp
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=_utcnow)
     
     # Relationship to Session
     session = relationship("Session", back_populates="messages")
@@ -210,7 +213,7 @@ class DocumentVersion(Base):
     content        = Column(Text, nullable=False)
     summary        = Column(String, nullable=True)     # Edit description
     source         = Column(String, default="ai")      # "ai" or "user"
-    created_at     = Column(DateTime, default=datetime.utcnow)
+    created_at     = Column(DateTime, default=_utcnow)
 
     document = relationship("Document", back_populates="versions")
 
@@ -330,6 +333,7 @@ class ModelEndpoint(TimestampMixin, Base):
     # is the historical default. When non-null, the model picker only shows
     # the endpoint to that user (admins always see everything).
     owner = Column(String, nullable=True, index=True)
+    free_only = Column(Boolean, nullable=True, default=False)
 
 class McpServer(TimestampMixin, Base):
     """Admin-configured MCP (Model Context Protocol) tool servers."""
@@ -456,8 +460,8 @@ class UserToolData(Base):
     tool_id    = Column(String, ForeignKey("user_tools.id", ondelete="CASCADE"), nullable=False)
     key        = Column(String, nullable=False)
     value      = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     tool = relationship("UserTool", backref=backref("data_entries", cascade="all, delete-orphan"))
 
@@ -576,7 +580,7 @@ class TaskRun(Base):
 
     id          = Column(String, primary_key=True, index=True)
     task_id     = Column(String, ForeignKey("scheduled_tasks.id", ondelete="CASCADE"), nullable=False)
-    started_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
+    started_at  = Column(DateTime, nullable=False, default=_utcnow)
     finished_at = Column(DateTime, nullable=True)
     status      = Column(String, default="running")  # "running", "success", "error"
     result      = Column(Text, nullable=True)
@@ -617,7 +621,7 @@ class Memory(Base):
     session_id = Column(String, ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Timestamp as Unix timestamp
-    timestamp = Column(Integer, default=lambda: int(datetime.utcnow().timestamp()))
+    timestamp = Column(Integer, default=lambda: int(datetime.now(timezone.utc).timestamp()))
 
     # Relationship to Session
     session = relationship("Session", backref="memories")
@@ -824,6 +828,25 @@ def _migrate_add_supports_tools_column():
         logging.getLogger(__name__).warning(f"supports_tools migration failed: {e}")
 
 
+def _migrate_add_free_only_column():
+    """Add free_only column to model_endpoints if it doesn't exist."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(model_endpoints)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if columns and "free_only" not in columns:
+            conn.execute("ALTER TABLE model_endpoints ADD COLUMN free_only BOOLEAN DEFAULT 0")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'free_only' column to model_endpoints")
+        conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"free_only migration failed: {e}")
+
+
 def _migrate_add_cached_models_column():
     """Add cached_models column to model_endpoints if it doesn't exist."""
     import sqlite3
@@ -923,8 +946,17 @@ def _migrate_add_token_columns():
     except Exception as e:
         logging.getLogger(__name__).warning(f"Migration check for token columns failed: {e}")
 
+# Tables that legitimately need an owner column added by _migrate_add_owner_to_table.
+_OWNER_MIGRATION_TABLES = {
+    "memories", "gallery_images", "user_tools", "comparisons",
+    "api_tokens", "documents",
+}
+
 def _migrate_add_owner_to_table(table_name: str, index_name: str):
     """Generic helper: add owner TEXT column + index to a table if missing."""
+    if table_name not in _OWNER_MIGRATION_TABLES:
+        logging.getLogger(__name__).error(f"Refused to migrate unknown table '{table_name}'")
+        return
     import sqlite3
     db_path = DATABASE_URL.replace("sqlite:///", "")
     if not os.path.exists(db_path):
@@ -1446,7 +1478,7 @@ def _migrate_seed_email_account():
         if not imap_host and not smtp_host:
             return  # nothing to migrate
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO email_accounts
@@ -1496,6 +1528,7 @@ def init_db():
     _migrate_add_model_type_column()
     _migrate_add_model_endpoint_owner_column()
     _migrate_add_supports_tools_column()
+    _migrate_add_free_only_column()
     _migrate_add_task_run_model_column()
     _migrate_add_owner_column()
     _migrate_add_document_archived_column()
@@ -1691,10 +1724,11 @@ def bulk_insert_messages(session_id: str, messages: list):
             ChatMessage,
             [
                 {
+                    'id': str(uuid.uuid4()),
                     'session_id': session_id,
                     'role': msg['role'],
                     'content': msg['content'],
-                    'timestamp': datetime.utcnow()
+                    'timestamp': datetime.now(timezone.utc)
                 }
                 for msg in messages
             ]
@@ -1705,12 +1739,12 @@ def cleanup_old_sessions(days: int = 30):
     from datetime import timedelta
     
     with get_db_session() as db:
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         
         deleted_count = db.query(Session).filter(
-            Session.archived == True,
+            Session.archived.is_(True),
             Session.last_accessed < cutoff_date,
-            Session.is_important == False
+            Session.is_important.is_(False)
         ).delete()
         
         return deleted_count
@@ -1720,8 +1754,8 @@ def get_session_stats():
     with get_db_session() as db:
         stats = {
             'total_sessions': db.query(Session).count(),
-            'active_sessions': db.query(Session).filter(Session.archived == False).count(),
-            'archived_sessions': db.query(Session).filter(Session.archived == True).count(),
+            'active_sessions': db.query(Session).filter(Session.archived.is_(False)).count(),
+            'archived_sessions': db.query(Session).filter(Session.archived.is_(True)).count(),
             'total_messages': db.query(ChatMessage).count(),
             'total_memories': db.query(Memory).count()
         }
@@ -1750,8 +1784,8 @@ def update_session_last_accessed(session_id: str):
     with get_db_session() as db:
         db_session = db.query(Session).filter(Session.id == session_id).first()
         if db_session:
-            db_session.last_accessed = datetime.utcnow()
-            db.commit()
+            db_session.last_accessed = datetime.now(timezone.utc)
+            # Context manager commits on clean exit — no explicit commit needed.
             return True
     return False
 

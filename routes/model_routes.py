@@ -6,7 +6,7 @@ import json
 import time as _time
 import logging
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Form, Query, Body, Request
@@ -136,6 +136,7 @@ _URL_TO_CURATED = {
     "api.x.ai": "xai",
     "openrouter.ai": "openrouter",
     "ollama.com": "ollama",
+    "integrate.api.nvidia.com": "nvidia",
 }
 
 
@@ -212,6 +213,19 @@ def _is_chat_model(model_id: str) -> bool:
         if substr in mid:
             return False
     return True
+
+
+def _is_free_model(model_id: str, base_url: str) -> bool:
+    """Return True if the model ID is considered free or the endpoint is local."""
+    if _classify_endpoint(base_url) == "local":
+        return True
+    mid = model_id.lower()
+    if "free" in mid:
+        return True
+    if "googleapis.com" in base_url or "google" in base_url.lower():
+        if "openrouter" not in base_url:
+            return True
+    return False
 
 
 def _probe_single_model(base: str, api_key: str, model_id: str, timeout: int = 10, with_tools: bool = False) -> dict:
@@ -396,7 +410,7 @@ def _ping_endpoint(base_url: str, api_key: str = None, timeout: float = 1.5) -> 
                 return {
                     "reachable": False,
                     "status_code": r.status_code,
-                    "error": "That is Odysseus, not a model server. Use the Ollama URL, usually http://host.docker.internal:11434/v1 in Docker.",
+                    "error": "That is Origin, not a model server. Use the Ollama URL, usually http://host.docker.internal:11434/v1 in Docker.",
                 }
             return {"reachable": False, "status_code": r.status_code, "error": f"HTTP {r.status_code} redirect"}
         if r.status_code < 500:
@@ -529,7 +543,6 @@ def setup_model_routes(model_discovery):
 
         for ep in endpoints:
             base = _normalize_base(ep.base_url)
-            provider = _detect_provider(base)
             # Use cached models — background refresh keeps them updated
             model_ids = []
             if ep.cached_models:
@@ -537,6 +550,8 @@ def setup_model_routes(model_discovery):
                     model_ids = json.loads(ep.cached_models)
                 except Exception:
                     pass
+            if getattr(ep, "free_only", False):
+                model_ids = [m for m in model_ids if _is_free_model(m, ep.base_url)]
             ep_model_type = getattr(ep, "model_type", None) or "llm"
             # Filter out hidden (probe-failed) models
             hidden = set()
@@ -898,6 +913,8 @@ def setup_model_routes(model_discovery):
                         all_models = json.loads(r.cached_models)
                     except Exception:
                         pass
+                if getattr(r, "free_only", False):
+                    all_models = [m for m in all_models if _is_free_model(m, r.base_url)]
                 hidden = set()
                 if r.hidden_models:
                     try:
@@ -924,6 +941,7 @@ def setup_model_routes(model_discovery):
                     "ping_error": (ping or {}).get("error") if ping else None,
                     "model_type": getattr(r, "model_type", None) or "llm",
                     "supports_tools": getattr(r, "supports_tools", None),
+                    "free_only": getattr(r, "free_only", False),
                 })
             return results
         finally:
@@ -943,6 +961,7 @@ def setup_model_routes(model_discovery):
         # app's historical behaviour). Admins can pass `shared=false` to
         # scope a new endpoint to their own account only.
         shared: str = Form("true"),
+        free_only: str = Form("false"),
     ):
         require_admin(request)
         base_url = base_url.strip().rstrip("/")
@@ -1023,6 +1042,7 @@ def setup_model_routes(model_discovery):
                 cached_models=json.dumps(model_ids) if model_ids else None,
                 supports_tools=_st,
                 owner=_owner_val,
+                free_only=_truthy(free_only),
             )
             db.add(ep)
             db.commit()
@@ -1149,6 +1169,8 @@ def setup_model_routes(model_discovery):
                     all_models = json.loads(ep.cached_models)
                 except Exception:
                     pass
+            if getattr(ep, "free_only", False):
+                all_models = [m for m in all_models if _is_free_model(m, ep.base_url)]
             return [
                 {"id": m, "display": m.split("/")[-1], "is_hidden": m in hidden}
                 for m in all_models
@@ -1276,6 +1298,8 @@ def setup_model_routes(model_discovery):
             if not model and getattr(ep, "cached_models", None):
                 try:
                     models = _json.loads(ep.cached_models) if isinstance(ep.cached_models, str) else ep.cached_models
+                    if getattr(ep, "free_only", False):
+                        models = [m for m in models if _is_free_model(m, ep.base_url)]
                     if models:
                         model = models[0]
                 except Exception:
@@ -1311,6 +1335,8 @@ def setup_model_routes(model_discovery):
                     ep.name = body["name"].strip() or ep.name
                 if "model_type" in body and isinstance(body["model_type"], str):
                     ep.model_type = body["model_type"].strip() or ep.model_type
+                if "free_only" in body:
+                    ep.free_only = bool(body["free_only"])
             else:
                 ep.is_enabled = not ep.is_enabled
             db.commit()
@@ -1321,6 +1347,7 @@ def setup_model_routes(model_discovery):
                 "supports_tools": ep.supports_tools,
                 "name": ep.name,
                 "model_type": ep.model_type,
+                "free_only": ep.free_only,
             }
         finally:
             db.close()
@@ -1382,7 +1409,7 @@ def setup_model_routes(model_discovery):
             if _session_uses_endpoint_url(row.endpoint_url or "", base_url):
                 row.endpoint_url = ""
                 row.model = ""
-                row.updated_at = datetime.utcnow()
+                row.updated_at = datetime.now(timezone.utc)
                 cleared += 1
         return cleared
 

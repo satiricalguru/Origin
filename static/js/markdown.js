@@ -479,7 +479,7 @@ export function mdToHtml(src) {
     const escaped = cleaned.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const placeholder = `___CODE_BLOCK_${codeBlocks.length}___`;
 
-    const langClass = lang ? ` class="language-${lang}"` : '';
+    const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : '';
     const runnableLangs = ['python','py','javascript','js','html','bash','sh','shell','zsh'];
     const runBtn = (lang && runnableLangs.includes(lang.toLowerCase()))
       ? `<button type="button" class="run-code" data-code="${escapeHtml(escaped)}" data-lang="${lang}" title="Run code"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>`
@@ -696,7 +696,7 @@ export default markdownModule;
 // Mermaid is loaded async so it cannot delay the app shell.
 function initMermaid() {
   if (!window.mermaid || window.__originMermaidReady) return;
-  window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+  window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'sandbox' });
   window.__originMermaidReady = true;
 }
 window.originInitMermaid = initMermaid;

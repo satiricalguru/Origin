@@ -19,7 +19,7 @@ import searchModule from './search.js';
 import documentModule from './document.js';
 import * as emailInbox from './emailInbox.js';
 import codeRunnerModule from './codeRunner.js';
-import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js';
+import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto, _ALIAS_MAP } from './slashCommands.js';
 import createResearchSynapse from './researchSynapse.js';
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -156,6 +156,96 @@ import createResearchSynapse from './researchSynapse.js';
     initSlashCommands({ apiBase, isStreaming: () => isStreaming });
     // Initialize email inbox
     emailInbox.init(documentModule);
+
+    // Slash command autocomplete dropdown
+    const msgInput = document.getElementById('message');
+    if (msgInput) {
+      function _esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+      let _acDropdown = null;
+
+      msgInput.addEventListener('input', () => {
+        const val = msgInput.value;
+        const cursorPos = msgInput.selectionStart;
+        const textBeforeCursor = val.substring(0, cursorPos);
+        const slashIdx = textBeforeCursor.lastIndexOf('/');
+
+        if (slashIdx >= 0 && (slashIdx === 0 || val[slashIdx - 1] === ' ' || val[slashIdx - 1] === '\n')) {
+          const partial = textBeforeCursor.substring(slashIdx + 1).toLowerCase();
+          const matches = Object.keys(_ALIAS_MAP || {})
+            .filter(name => {
+              const fullName = name.startsWith('/') ? name : '/' + name;
+              return fullName.startsWith('/' + partial) || name.startsWith(partial);
+            })
+            .sort()
+            .slice(0, 10);
+
+          if (matches.length > 0 && partial.length > 0) {
+            if (!_acDropdown) {
+              _acDropdown = document.createElement('div');
+              _acDropdown.className = 'slash-autocomplete';
+              _acDropdown.style.cssText = 'position:absolute;bottom:100%;left:0;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 -4px 16px rgba(0,0,0,0.3);z-index:10000;max-height:200px;overflow-y:auto;min-width:200px;font-size:12px;';
+              msgInput.parentElement.style.position = 'relative';
+              msgInput.parentElement.appendChild(_acDropdown);
+            }
+
+            _acDropdown.innerHTML = matches.map((m, i) => {
+              const cmdName = m.startsWith('/') ? m : '/' + m;
+              const cmdDef = _ALIAS_MAP && _ALIAS_MAP[m];
+              const helpText = cmdDef ? (cmdDef.help || '') : '';
+              return `<div class="slash-ac-item" data-cmd="${_esc(cmdName)}" style="padding:6px 12px;cursor:pointer;display:flex;justify-content:space-between;border-radius:4px;margin:1px;${i === 0 ? 'background:var(--accent);color:#fff;' : 'color:var(--fg);'}">` +
+                `<span><strong>${_esc(cmdName)}</strong></span>` +
+                (helpText ? `<span style="opacity:0.6;font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(helpText)}</span>` : '') +
+                `</div>`;
+            }).join('');
+
+            _acDropdown.style.display = 'block';
+
+            _acDropdown.querySelectorAll('.slash-ac-item').forEach(el => {
+              el.onclick = () => {
+                const cmd = el.dataset.cmd;
+                const beforeSlash = val.substring(0, slashIdx);
+                const afterSlash = val.substring(cursorPos);
+                msgInput.value = beforeSlash + cmd + ' ' + afterSlash;
+                msgInput.focus();
+                msgInput.selectionStart = msgInput.selectionEnd = beforeSlash.length + cmd.length + 1;
+                if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+                if (uiModule.autoResize) uiModule.autoResize(msgInput);
+              };
+              el.onmouseenter = () => {
+                _acDropdown.querySelectorAll('.slash-ac-item').forEach(e => { e.style.background = 'transparent'; e.style.color = 'var(--fg)'; });
+                el.style.background = 'var(--accent)'; el.style.color = '#fff';
+              };
+            });
+          } else {
+            if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+          }
+        } else {
+          if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+        }
+      });
+
+      msgInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _acDropdown) {
+          _acDropdown.style.display = 'none';
+          _acDropdown = null;
+          e.preventDefault();
+        }
+        if ((e.key === 'Tab' || e.key === 'Enter') && _acDropdown && _acDropdown.style.display !== 'none') {
+          const selected = _acDropdown.querySelector('.slash-ac-item');
+          if (selected) {
+            e.preventDefault();
+            selected.click();
+          }
+        }
+      });
+
+      msgInput.addEventListener('blur', () => {
+        setTimeout(() => {
+          if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+        }, 200);
+      });
+    }
   }
 
   // addMessage, createMsgFooter, displayMetrics, hideWelcomeScreen, showWelcomeScreen
@@ -228,6 +318,7 @@ import createResearchSynapse from './researchSynapse.js';
    */
   export async function handleChatSubmit(e) {
     e.preventDefault();
+    const esc = uiModule.esc;
     // Cancel research clarification timeout if active
     if (window._researchTimeoutTimer) {
       clearTimeout(window._researchTimeoutTimer);
@@ -383,73 +474,88 @@ import createResearchSynapse from './researchSynapse.js';
       if (submitBtn) submitBtn.classList.remove('send-pending');
     };
 
-    // --- Setup mode: intercept next message (but let slash commands through) ---
-    {
-      const el = uiModule.el;
-      const rawMsg = (el('message').value || '').trim();
-      const currentSetupMode = slashCommands.getSetupMode();
-      if (currentSetupMode && rawMsg && !isCommand(rawMsg)) {
-        const mode = currentSetupMode;
-        slashCommands.clearSetupMode(mode === 'endpoint-provider' || mode === 'endpoint-key-for-provider');
-        el('message').value = '';
-        if (window._syncModelPickerAutohide) window._syncModelPickerAutohide();
-        if (uiModule.autoResize) uiModule.autoResize(el('message'));
-        if (mode === true || mode === 'endpoint') {
-          handleSetupInput(rawMsg);
-        } else {
-          handleSetupWizard(mode, rawMsg);
-        }
-        _releaseSendFlag();
-        return;
-      }
-      if (currentSetupMode && rawMsg && isCommand(rawMsg)) {
-        slashCommands.clearSetupMode();  // Clear setup mode, fall through to slash handler
-      }
-    }
+    let msg = '';
+    let messageInput = null;
+    let streamSessionId = null;
+    let streamQuery = '';
 
-    const el = uiModule.el;
-    const msg = el('message').value;
-    // Allow empty text when a regen carries over the original message's
-    // attachment ids — a photo-only message still has something to send.
-    if (!msg.trim() && !fileHandlerModule.getPendingCount() && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) { _releaseSendFlag(); return; }
-
-    // --- Slash commands: execute directly without AI (no session needed) ---
-    if (isCommand(msg.trim())) {
-      const handled = await handleSlashCommand(msg.trim());
-      if (handled) {
-        el('message').value = '';
-        if (window._syncModelPickerAutohide) window._syncModelPickerAutohide();
-        if (uiModule.autoResize) uiModule.autoResize(el('message'));
-        _releaseSendFlag();
-        return;
-      }
-    }
-
-    // Materialize pending session (deferred from model click) on first message
-    if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
-      const ok = await sessionModule.materializePendingSession();
-      if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
-    }
-
-    if (!sessionModule.getCurrentSessionId()) {
-      // Auto-create a session using default chat config. Always fetch fresh
-      // so that a recent Settings change takes effect without a page reload.
-      try {
-        let dc = null;
-        try {
-          const dcRes = await fetch('/api/default-chat');
-          dc = await dcRes.json();
-          if (dc && dc.endpoint_url && dc.model) {
-            try { window.__originDefaultChat = dc; } catch (_) {}
+    try {
+      // --- Setup mode: intercept next message (but let slash commands through) ---
+      {
+        const el = uiModule.el;
+        const rawMsg = (el('message').value || '').trim();
+        const currentSetupMode = slashCommands.getSetupMode();
+        if (currentSetupMode && rawMsg && !isCommand(rawMsg)) {
+          const mode = currentSetupMode;
+          slashCommands.clearSetupMode(mode === 'endpoint-provider' || mode === 'endpoint-key-for-provider');
+          el('message').value = '';
+          if (window._syncModelPickerAutohide) window._syncModelPickerAutohide();
+          if (uiModule.autoResize) uiModule.autoResize(el('message'));
+          if (mode === true || mode === 'endpoint') {
+            handleSetupInput(rawMsg);
+          } else {
+            handleSetupWizard(mode, rawMsg);
           }
-        } catch (_) {
-          dc = (typeof window !== 'undefined' && window.__originDefaultChat) || null;
+          _releaseSendFlag();
+          return;
         }
-        if (dc.endpoint_url && dc.model) {
-          await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
-          const ok = await sessionModule.materializePendingSession();
-          if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
-        } else {
+        if (currentSetupMode && rawMsg && isCommand(rawMsg)) {
+          slashCommands.clearSetupMode();  // Clear setup mode, fall through to slash handler
+        }
+      }
+
+      const el = uiModule.el;
+      msg = el('message').value;
+      // Allow empty text when a regen carries over the original message's
+      // attachment ids — a photo-only message still has something to send.
+      if (!msg.trim() && !fileHandlerModule.getPendingCount() && !(_pendingRegenAttachments && _pendingRegenAttachments.length)) { _releaseSendFlag(); return; }
+
+      // --- Slash commands: execute directly without AI (no session needed) ---
+      if (isCommand(msg.trim())) {
+        const handled = await handleSlashCommand(msg.trim());
+        if (handled) {
+          el('message').value = '';
+          if (window._syncModelPickerAutohide) window._syncModelPickerAutohide();
+          if (uiModule.autoResize) uiModule.autoResize(el('message'));
+          _releaseSendFlag();
+          return;
+        }
+      }
+
+      // Materialize pending session (deferred from model click) on first message
+      if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
+        const ok = await sessionModule.materializePendingSession();
+        if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
+      }
+
+      if (!sessionModule.getCurrentSessionId()) {
+        // Auto-create a session using default chat config. Always fetch fresh
+        // so that a recent Settings change takes effect without a page reload.
+        try {
+          let dc = null;
+          try {
+            const dcRes = await fetch('/api/default-chat');
+            dc = await dcRes.json();
+            if (dc && dc.endpoint_url && dc.model) {
+              try { window.__originDefaultChat = dc; } catch (_) {}
+            }
+          } catch (_) {
+            dc = (typeof window !== 'undefined' && window.__originDefaultChat) || null;
+          }
+          if (dc.endpoint_url && dc.model) {
+            await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
+            const ok = await sessionModule.materializePendingSession();
+            if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
+          } else {
+            addMessage('assistant',
+              'No chat session active. You can:\n\n' +
+              '- Open the model picker in the chat box and pick a model\n' +
+              '- Use the `+` button in the model picker to add a model endpoint\n' +
+              '- Use `/help` to see all available commands');
+            _releaseSendFlag();
+            return;
+          }
+        } catch (e) {
           addMessage('assistant',
             'No chat session active. You can:\n\n' +
             '- Open the model picker in the chat box and pick a model\n' +
@@ -458,76 +564,72 @@ import createResearchSynapse from './researchSynapse.js';
           _releaseSendFlag();
           return;
         }
-      } catch (e) {
-        addMessage('assistant',
-          'No chat session active. You can:\n\n' +
-          '- Open the model picker in the chat box and pick a model\n' +
-          '- Use the `+` button in the model picker to add a model endpoint\n' +
-          '- Use `/help` to see all available commands');
-        _releaseSendFlag();
-        return;
       }
-    }
 
-    // --- API key guard: warn if message looks like an API key ---
-    if (API_KEY_RE.test(msg.trim())) {
-      if (!await window.styledConfirm('This looks like an API key. Sending it to the AI could expose it.\n\nDid you mean to use /setup instead?', { confirmText: 'Send anyway', danger: true })) {
-        _releaseSendFlag();
-        return;
+      // --- API key guard: warn if message looks like an API key ---
+      if (API_KEY_RE.test(msg.trim())) {
+        if (!await window.styledConfirm('This looks like an API key. Sending it to the AI could expose it.\n\nDid you mean to use /setup instead?', { confirmText: 'Send anyway', danger: true })) {
+          _releaseSendFlag();
+          return;
+        }
       }
-    }
 
 
-    const messageInput = el('message');
-    const originalBtnText = submitBtn ? submitBtn.innerHTML : '';
+      messageInput = el('message');
+      const originalBtnText = submitBtn ? submitBtn.innerHTML : '';
 
-    // Re-enable the textarea now that we've handed off to the stream: the
-    // user wants to compose the next message while the AI is still talking.
-    // The `isStreaming` flag is the re-click guard for the send button.
-    if (messageInput) messageInput.disabled = false;
-    updateSubmitButton('streaming', submitBtn);
-    if (submitBtn) submitBtn.classList.remove('send-pending');
-    _sendInFlight = false;
+      // Re-enable the textarea now that we've handed off to the stream: the
+      // user wants to compose the next message while the AI is still talking.
+      // The `isStreaming` flag is the re-click guard for the send button.
+      if (messageInput) messageInput.disabled = false;
+      updateSubmitButton('streaming', submitBtn);
+      if (submitBtn) submitBtn.classList.remove('send-pending');
+      _sendInFlight = false;
 
-    // Capture session ID for background stream detection
-    const streamSessionId = sessionModule.getCurrentSessionId();
-    _streamSessionId = streamSessionId;
-    const streamQuery = msg;
-    _lastReaderActivity = Date.now();
+      // Capture session ID for background stream detection
+      streamSessionId = sessionModule.getCurrentSessionId();
+      _streamSessionId = streamSessionId;
+      streamQuery = msg;
+      _lastReaderActivity = Date.now();
 
-    // Acquire Web Lock to hint browser not to discard this tab while streaming
-    if (navigator.locks) {
-      navigator.locks.request('origin-stream-' + streamSessionId, { mode: 'exclusive', ifAvailable: true }, lock => {
-        if (!lock) return; // Another stream already holds a lock — fine
-        return new Promise(resolve => { _webLockRelease = resolve; });
-      }).catch(e => console.warn('web lock acquire failed:', e)); // Ignore lock errors — best-effort
-    }
-
-    // Declare accumulated outside try block so it's accessible in catch
-    let accumulated = '';
-    let holder = null;
-    let finalMeta = null;
-    let finalModelName = null;
-    let spinner = null;
-    let timedOut = false;
-    let processingProbeTimer = null;
-    let processingProbeAbort = null;
-    const clearProcessingProbe = () => {
-      if (processingProbeTimer) {
-        clearTimeout(processingProbeTimer);
-        processingProbeTimer = null;
+      // Acquire Web Lock to hint browser not to discard this tab while streaming
+      if (navigator.locks) {
+        navigator.locks.request('origin-stream-' + streamSessionId, { mode: 'exclusive', ifAvailable: true }, lock => {
+          if (!lock) return; // Another stream already holds a lock — fine
+          return new Promise(resolve => { _webLockRelease = resolve; });
+        }).catch(e => console.warn('web lock acquire failed:', e)); // Ignore lock errors — best-effort
       }
-      if (processingProbeAbort) {
-        try { processingProbeAbort.abort(); } catch (_) {}
-        processingProbeAbort = null;
-      }
-    };
 
-    // Reset tracking variables at start
-    currentAccumulated = '';
-    currentHolder = null;
-    
-    try {
+      // Declare accumulated outside try block so it's accessible in catch
+      let accumulated = '';
+      let holder = null;
+      let finalMeta = null;
+      let finalModelName = null;
+      let spinner = null;
+      let timedOut = false;
+      let processingProbeTimer = null;
+      let processingProbeAbort = null;
+      let _isAgent = false;
+      let streamingTTS = false;
+      let _renderStream = null;
+      let _cancelThinkingTimer = null;
+      let _removeThinkingSpinner = null;
+      const clearProcessingProbe = () => {
+        if (processingProbeTimer) {
+          clearTimeout(processingProbeTimer);
+          processingProbeTimer = null;
+        }
+        if (processingProbeAbort) {
+          try { processingProbeAbort.abort(); } catch (_) {}
+          processingProbeAbort = null;
+        }
+      };
+
+      // Reset tracking variables at start
+      currentAccumulated = '';
+      currentHolder = null;
+      
+      try {
       // Re-enable auto-scroll when user sends a message
       uiModule.setAutoScroll(true);
       uiModule.scrollHistoryInstant();
@@ -768,7 +870,7 @@ import createResearchSynapse from './researchSynapse.js';
       currentAbort = abortCtrl;
 
       const _tState = Storage.loadToggleState();
-      const _isAgent = (_tState.mode || 'chat') === 'agent';
+      _isAgent = (_tState.mode || 'chat') === 'agent';
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -957,7 +1059,7 @@ import createResearchSynapse from './researchSynapse.js';
       let isThinking = false;
       let thinkingStartTime = null;
       // Streaming TTS: synthesize sentence-by-sentence during streaming
-      const streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
+      streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
       if (streamingTTS) window.aiTTSManager.streamingStart();
       // Multi-bubble agent tracking
       let roundHolder = holder;       // Current AI text bubble (changes per round)
@@ -984,15 +1086,14 @@ import createResearchSynapse from './researchSynapse.js';
         }
         return contentDiv;
       }
-      const esc = uiModule.esc;
       // Remove thinking spinner helper
-      function _removeThinkingSpinner() {
+      _removeThinkingSpinner = function() {
         const el = document.querySelector('.agent-thinking-dots');
         if (el) {
           if (el._spinner) el._spinner.destroy();
           el.remove();
         }
-      }
+      };
 
       // Tool-aware thinking spinner
       let _lastToolName = '';
@@ -1056,9 +1157,9 @@ import createResearchSynapse from './researchSynapse.js';
           }
         }, 400);
       }
-      function _cancelThinkingTimer() {
+      _cancelThinkingTimer = function() {
         if (_textPauseTimer) { clearTimeout(_textPauseTimer); _textPauseTimer = null; }
-      }
+      };
 
       // Document streaming state (text-fence detection)
       let _docFenceOpened = false;
@@ -1085,7 +1186,7 @@ import createResearchSynapse from './researchSynapse.js';
       }
 
       // Direct render helper for streaming text
-      function _renderStream() {
+      _renderStream = function() {
         let dt = stripToolBlocks(roundText);
         const bodyEl = roundHolder.querySelector('.body');
         const contentEl = _ensureStreamLayout(bodyEl);
@@ -2495,11 +2596,11 @@ import createResearchSynapse from './researchSynapse.js';
       } // end if (!_isBgFinal)
 
     } catch (err) {
-      _renderStream();
+      if (_renderStream) _renderStream();
       // Clean up any active spinner (e.g. "Generating response" during tool calls)
       if (spinner && spinner.element) spinner.destroy();
-      _cancelThinkingTimer();
-      _removeThinkingSpinner();
+      if (_cancelThinkingTimer) _cancelThinkingTimer();
+      if (_removeThinkingSpinner) _removeThinkingSpinner();
       document.querySelectorAll('.agent-thread.streaming').forEach(t => t.classList.remove('streaming'));
       // Check if this stream was running in background
       const _isBgCatch = (sessionModule.getCurrentSessionId() !== streamSessionId) || _backgroundStreams.has(streamSessionId);
@@ -2761,6 +2862,22 @@ import createResearchSynapse from './researchSynapse.js';
         }
       }, 3000);
     }
+  } catch (err) {
+    console.error('Error during chat submit initialization:', err);
+    _releaseSendFlag();
+    updateSubmitButton('idle', submitBtn);
+      
+      const chatHistory = document.getElementById('chat-history');
+      if (chatHistory) {
+        const errDiv = document.createElement('div');
+        errDiv.className = 'msg msg-ai';
+        const errorMsg = err && err.message ? err.message : String(err);
+        const escapedMsg = uiModule.esc ? uiModule.esc(errorMsg) : errorMsg;
+        errDiv.innerHTML = `<div class="role">System</div><div class="body" style="color: var(--color-error); font-style: italic;">Error initializing chat: ${escapedMsg}</div>`;
+        chatHistory.appendChild(errDiv);
+        uiModule.scrollHistory();
+      }
+    }
   }
 
   /**
@@ -2781,7 +2898,7 @@ import createResearchSynapse from './researchSynapse.js';
         const _sid = _streamSessionId
           || (window.sessionModule && window.sessionModule.getCurrentSessionId && window.sessionModule.getCurrentSessionId());
         if (_sid) {
-          fetch(`/api/chat/stop/${encodeURIComponent(_sid)}`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+          fetch(`/api/chat/stop/${encodeURIComponent(_sid)}`, { method: 'POST', credentials: 'same-origin' }).catch(e => { console.warn('[chat] stop stream failed:', e); });
         }
       } catch (_) {}
     }
@@ -2936,7 +3053,7 @@ import createResearchSynapse from './researchSynapse.js';
             metadata: { stopped: true, cancelled: true, model: modelName },
           }],
         }),
-      }).catch(() => {});
+      }).catch(e => { console.warn('[chat] inject stop message failed:', e); });
     }
   }
 
@@ -4440,7 +4557,7 @@ import createResearchSynapse from './researchSynapse.js';
       }
     } catch (e) {
       console.error('open attachment as document failed', e);
-      import('./ui.js').then(m => m.showError && m.showError('Could not open attachment')).catch(() => {});
+      import('./ui.js').then(m => m.showError && m.showError('Could not open attachment')).catch(e => { console.warn('[chat] failed to show attachment error:', e); });
       window.open(url, '_blank');  // fallback so the file is still reachable
     }
   }

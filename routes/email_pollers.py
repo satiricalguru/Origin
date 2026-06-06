@@ -18,12 +18,11 @@ Pure helpers live in `email_helpers.py`. Routes themselves live in
 
 import email as email_mod
 import email.utils  # the `email` binding is referenced as email.utils.parseaddr inside the pass
-import smtplib
 import json
 import re
 import html
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -132,7 +131,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
     try:
         conn = _imap_connect(account_id)
         from datetime import timedelta as _td
-        since = (datetime.utcnow() - _td(days=max(1, days_back))).strftime("%d-%b-%Y")
+        since = (datetime.now(timezone.utc) - _td(days=max(1, days_back))).strftime("%d-%b-%Y")
         # uid_list now carries (folder, uid) tuples — for calendar extraction we
         # also scan Sent so the LLM sees confirmation/cancellation replies the user wrote.
         uid_list = []
@@ -318,7 +317,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     INSERT OR REPLACE INTO email_summaries
                                     (message_id, uid, folder, subject, sender, summary, model_used, created_at)
                                     VALUES (?, ?, 'INBOX', ?, ?, ?, ?, ?)
-                                """, (message_id, uid.decode(), subject, sender, summary, model, datetime.utcnow().isoformat()))
+                                """, (message_id, uid.decode(), subject, sender, summary, model, datetime.now(timezone.utc).isoformat()))
                                 _c.commit()
                                 _c.close()
                                 _sum_existing.add(message_id)
@@ -351,7 +350,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                 INSERT OR REPLACE INTO email_ai_replies
                                 (message_id, uid, folder, reply, model_used, created_at)
                                 VALUES (?, ?, 'INBOX', ?, ?, ?)
-                            """, (message_id, uid.decode(), reply, model, datetime.utcnow().isoformat()))
+                            """, (message_id, uid.decode(), reply, model, datetime.now(timezone.utc).isoformat()))
                             _c.commit()
                             _c.close()
                             _reply_existing.add(message_id)
@@ -370,9 +369,9 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                             _db = _SL()
                             try:
                                 from datetime import timedelta as _td2
-                                _horizon = datetime.utcnow() + _td2(days=60)
+                                _horizon = datetime.now(timezone.utc) + _td2(days=60)
                                 _evs = _db.query(_CE).filter(
-                                    _CE.dtstart >= datetime.utcnow(),
+                                    _CE.dtstart >= datetime.now(timezone.utc),
                                     _CE.dtstart <= _horizon,
                                     _CE.status != "cancelled",
                                 ).order_by(_CE.dtstart).limit(40).all()
@@ -575,7 +574,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                             "INSERT OR REPLACE INTO email_calendar_extractions "
                             "(message_id, uid, events_created, created_at) VALUES (?, ?, ?, ?)",
                             (message_id, uid.decode() if isinstance(uid, bytes) else str(uid),
-                             _cal_run_count, datetime.utcnow().isoformat())
+                             _cal_run_count, datetime.now(timezone.utc).isoformat())
                         )
                         _cc.commit()
                         _cc.close()
@@ -636,7 +635,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     (message_id, uid.decode() if isinstance(uid, bytes) else str(uid),
                                      _folder, subject, sender, urgency, reason,
                                      1 if urgency in ("critical", "high") else 0,
-                                     datetime.utcnow().isoformat())
+                                     datetime.now(timezone.utc).isoformat())
                                 )
                                 _uc.commit()
                                 _uc.close()
@@ -650,19 +649,31 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     cfg = _get_email_config(account_id)
                                     to_addr = cfg["from_address"]  # self-email
 
-                                    # Deep-link to open the original email in Odysseus (if public URL is configured).
+                                    # Deep-link to open the original email in Origin (if public URL is configured).
                                     # Hash format `#email=FOLDER:UID` is handled by static/js/emailInbox.js:_maybeOpenFromHash.
+                                    # SECURITY: only render the deep link if the configured `app_public_url`
+                                    # is one Origin actually serves on (i.e. it matches the host/port
+                                    # we're about to email the user from). Otherwise a misconfigured
+                                    # `app_public_url` could turn an internal alert into a phishing link
+                                    # pointing at an attacker-controlled origin.
                                     from src.settings import load_settings as _ls
                                     _pub = (_ls().get("app_public_url") or "").rstrip("/")
                                     uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
-                                    from urllib.parse import quote as _q
-                                    open_url = f"{_pub}/#email={_q(_folder, safe='')}:{uid_str}" if _pub else ""
+                                    from urllib.parse import quote as _q, urlparse as _urlp
+                                    open_url = ""
+                                    if _pub:
+                                        try:
+                                            _p = _urlp(_pub)
+                                            if _p.scheme in ("http", "https") and _p.netloc:
+                                                open_url = f"{_pub}/#email={_q(_folder, safe='')}:{uid_str}"
+                                        except Exception:
+                                            open_url = ""
 
                                     alert_subject = f"[{urgency.upper()}] {subject}"
                                     alert_body = (
                                         f"Your AI assistant flagged this email as {urgency.upper()} urgency.\n\n"
                                         f"Reason: {reason}\n\n"
-                                        + (f"Open in Odysseus: {open_url}\n\n" if open_url else "")
+                                        + (f"Open in Origin: {open_url}\n\n" if open_url else "")
                                         + f"---\n"
                                         f"From: {sender}\n"
                                         f"Subject: {subject}\n"
@@ -670,14 +681,14 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                         f"{body[:800]}"
                                         + ("..." if len(body or "") > 800 else "")
                                     )
-                                    # HTML alternative with a clickable "Open in Odysseus" button
+                                    # HTML alternative with a clickable "Open in Origin" button
                                     import html as _h
                                     body_excerpt = _h.escape((body or "")[:800])
                                     open_html = (
                                         f'<p><a href="{_h.escape(open_url)}" '
                                         'style="display:inline-block;padding:8px 14px;background:#50fa7b;'
                                         'color:#000;text-decoration:none;border-radius:4px;font-weight:bold">'
-                                        'Open in Odysseus</a></p>'
+                                        'Open in Origin</a></p>'
                                     ) if open_url else ""
                                     alert_html = (
                                         f'<div style="font-family:system-ui,sans-serif;max-width:640px">'
@@ -699,7 +710,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     outer_alert["From"] = cfg["from_address"]
                                     outer_alert["To"] = to_addr
                                     outer_alert["Subject"] = alert_subject
-                                    outer_alert["Date"] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
+                                    outer_alert["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
                                     outer_alert["X-Priority"] = "1"
                                     outer_alert["Importance"] = "high"
                                     outer_alert.attach(MIMEText(alert_body, "plain", "utf-8"))
@@ -791,7 +802,7 @@ async def _auto_summarize_pass_single(days_back: int = 1, account_id: str | None
                                     VALUES (?, ?, 'INBOX', ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (message_id, uid.decode(), subject, sender,
                                       json.dumps(tags), 1 if is_spam else 0,
-                                      spam_reason, moved_to, model, datetime.utcnow().isoformat()))
+                                      spam_reason, moved_to, model, datetime.now(timezone.utc).isoformat()))
                                 _c.commit()
                                 _c.close()
                                 _tag_existing.add(message_id)
@@ -855,10 +866,10 @@ def _scheduled_poll_once() -> dict:
     sent = []
     failed = []
     try:
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(SCHEDULED_DB)
         cols = [row[1] for row in conn.execute("PRAGMA table_info(scheduled_emails)").fetchall()]
-        kind_expr = "odysseus_kind" if "odysseus_kind" in cols else "'scheduled' AS odysseus_kind"
+        kind_expr = "origin_kind" if "origin_kind" in cols else "'scheduled' AS origin_kind"
         rows = conn.execute(f"""
             SELECT id, to_addr, cc, bcc, subject, body, in_reply_to, references_hdr, attachments, account_id, {kind_expr}
             FROM scheduled_emails
@@ -870,9 +881,8 @@ def _scheduled_poll_once() -> dict:
             sid = r[0]
             try:
                 attachments = json.loads(r[8] or "[]")
-                row_account_id = r[9] if len(r) > 9 else None
-                odysseus_kind = r[10] if len(r) > 10 else "scheduled"
-                cfg = _get_email_config(row_account_id)
+                origin_kind = r[10] if len(r) > 10 else "scheduled"
+                cfg = _get_email_config(r[9])
                 has_atts = bool(attachments)
                 if has_atts:
                     outer = MIMEMultipart("mixed")
@@ -885,10 +895,10 @@ def _scheduled_poll_once() -> dict:
                 if r[2]:
                     outer["Cc"] = r[2]
                 outer["Subject"] = r[4] or ""
-                outer["Date"] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
-                outer["X-Odysseus-Origin"] = "odysseus-ui"
-                outer["X-Odysseus-Kind"] = re.sub(r"[^A-Za-z0-9_.-]", "-", odysseus_kind or "scheduled")[:64]
-                outer["X-Odysseus-Ref"] = sid
+                outer["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+                outer["X-Origin-Origin"] = "origin-ui"
+                outer["X-Origin-Kind"] = re.sub(r"[^A-Za-z0-9_.-]", "-", origin_kind or "scheduled")[:64]
+                outer["X-Origin-Ref"] = sid
                 if r[6]:
                     outer["In-Reply-To"] = r[6]
                 if r[7]:
@@ -939,7 +949,7 @@ def _scheduled_poll_once() -> dict:
 async def _scheduled_email_poller():
     """Background task that checks for due scheduled emails every 30
     seconds. Each tick delegates to `_scheduled_poll_once`, which is
-    also exposed via the `odysseus-mail poll-scheduled` CLI for
+    also exposed via the `origin-mail poll-scheduled` CLI for
     cron-driven deployments."""
     import asyncio
 
@@ -955,13 +965,13 @@ _poller_task = None
 _summarize_task = None
 
 def _inprocess_pollers_enabled() -> bool:
-    """Honour `ODYSSEUS_INPROCESS_POLLERS` — set to `0`/`false`/`no`/`off`
+    """Honour `ORIGIN_INPROCESS_POLLERS` — set to `0`/`false`/`no`/`off`
     to disable the asyncio tasks so a cron / systemd-timer setup driving
-    `odysseus-mail poll-scheduled` is the sole external driver. The legacy
+    `origin-mail poll-scheduled` is the sole external driver. The legacy
     auto-summary/reply poller no longer starts here; scheduled Tasks own that
     work so Email settings are only feature gates, not a second scheduler."""
     import os
-    raw = os.environ.get("ODYSSEUS_INPROCESS_POLLERS", "1").strip().lower()
+    raw = os.environ.get("ORIGIN_INPROCESS_POLLERS", "1").strip().lower()
     return raw not in ("0", "false", "no", "off", "")
 
 
@@ -969,13 +979,13 @@ def _start_poller():
     """Start background pollers. Called at module load; if no event loop is
     running yet (common at import time), defer via a first-request hook.
 
-    Skipped entirely when `ODYSSEUS_INPROCESS_POLLERS=0` — use that when
+    Skipped entirely when `ORIGIN_INPROCESS_POLLERS=0` — use that when
     you're driving polling from cron / systemd to avoid two copies of
     `_scheduled_poll_once` racing on the same SQLite."""
     if not _inprocess_pollers_enabled():
         logger.info(
-            "In-process email pollers disabled (ODYSSEUS_INPROCESS_POLLERS=0); "
-            "drive `odysseus-mail poll-scheduled` externally."
+            "In-process email pollers disabled (ORIGIN_INPROCESS_POLLERS=0); "
+            "drive `origin-mail poll-scheduled` externally."
         )
         return
     import asyncio

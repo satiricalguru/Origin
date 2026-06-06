@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, AsyncGenerator, List
 
 from fastapi import APIRouter, Request, HTTPException, Form, Query
@@ -83,7 +83,8 @@ def _clear_orphaned_session_endpoint(sess) -> bool:
         if db_session:
             db_session.endpoint_url = ""
             db_session.model = ""
-            db_session.updated_at = datetime.utcnow()
+            db_session.headers = {}
+            db_session.updated_at = datetime.now(timezone.utc)
             db.commit()
         sess.endpoint_url = ""
         sess.model = ""
@@ -1087,7 +1088,7 @@ def setup_chat_routes(
                                 db_msg = (
                                     db.query(DBChatMessage)
                                     .filter(DBChatMessage.session_id == session_id, DBChatMessage.role == 'assistant')
-                                    .order_by(DBChatMessage.created_at.desc())
+                                    .order_by(DBChatMessage.timestamp.desc())
                                     .first()
                                 )
                                 if db_msg:

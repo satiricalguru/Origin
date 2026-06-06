@@ -100,8 +100,8 @@ function _activateSpaceCard(card) {
 }
 
 function _initHoverCardSpaceToggle() {
-  if (document._odysseusHoverCardSpaceToggle) return;
-  document._odysseusHoverCardSpaceToggle = true;
+  if (document._originHoverCardSpaceToggle) return;
+  document._originHoverCardSpaceToggle = true;
   document.addEventListener('pointerover', (e) => {
     const chip = e.target?.closest?.('.minimized-dock-chip[data-modal-id]');
     if (chip) hoveredDockChip = chip;

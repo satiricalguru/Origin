@@ -1,14 +1,14 @@
 #!/bin/bash
-# Odysseus — one-command quick start for macOS (Apple Silicon).
+# Origin — one-command quick start for macOS (Apple Silicon).
 #
 #   ./start-macos.sh
 #
-# Installs everything Odysseus needs via Homebrew, sets up a local Python
+# Installs everything Origin needs via Homebrew, sets up a local Python
 # environment, and launches the app — so a generic Mac user can run it without
 # knowing anything about venvs, pip, or uvicorn. Safe to re-run; it skips work
 # that's already done.
 #
-# Why native (not Docker): Cookbook serves models on whatever machine Odysseus
+# Why native (not Docker): Cookbook serves models on whatever machine Origin
 # runs on, and Docker on macOS is a Linux VM with no access to the Metal GPU.
 # Running natively lets Cookbook detect and use your Mac's GPU.
 set -e
@@ -16,17 +16,17 @@ set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
-PORT="${ODYSSEUS_PORT:-7860}"   # 7860, not 7000 — macOS AirPlay Receiver holds 7000.
+PORT="${ORIGIN_PORT:-7860}"   # 7860, not 7000 — macOS AirPlay Receiver holds 7000.
 
 # Friendly message on any failure — re-running is safe (every step is idempotent).
 trap 'echo; echo "✗ Setup failed above. It is safe to re-run ./start-macos.sh."; exit 1' ERR
 
-echo "▶ Odysseus quick start for macOS"
+echo "▶ Origin quick start for macOS"
 
 # Fail fast if the port is already taken (e.g. a previous run still running).
 if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
   echo "✗ Port $PORT is already in use. Stop what's using it, or pick another port:"
-  echo "    ODYSSEUS_PORT=7900 ./start-macos.sh"
+  echo "    ORIGIN_PORT=7900 ./start-macos.sh"
   exit 1
 fi
 
@@ -97,8 +97,8 @@ echo "▶ Installing Python packages (first run downloads a few — can take a f
 # 4. First-run setup: creates data dirs and prints an initial admin password
 #    the first time (idempotent — does nothing if already set up). Suppress its
 #    manual run hint — we launch the server ourselves just below.
-echo "▶ Preparing Odysseus…"
-ODYSSEUS_SKIP_RUN_HINT=1 ./venv/bin/python setup.py
+echo "▶ Preparing Origin…"
+ORIGIN_SKIP_RUN_HINT=1 ./venv/bin/python setup.py
 
 # 5. Launch. Bind to loopback only (safe default).
 URL="http://127.0.0.1:$PORT"
@@ -106,15 +106,15 @@ URL="http://127.0.0.1:$PORT"
 # Open the browser automatically once the server is accepting connections — so
 # the URL isn't lost in the startup logs that keep scrolling. Runs in the
 # background and is cleaned up when the server stops. Skip with
-# ODYSSEUS_NO_OPEN=1 (e.g. over SSH / headless).
+# ORIGIN_NO_OPEN=1 (e.g. over SSH / headless).
 POLLER_PID=""
-if [ -z "$ODYSSEUS_NO_OPEN" ] && command -v open >/dev/null 2>&1; then
+if [ -z "$ORIGIN_NO_OPEN" ] && command -v open >/dev/null 2>&1; then
   (
     for _ in $(seq 1 90); do
       if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
         printf '\n'
         printf '  ┌────────────────────────────────────────────┐\n'
-        printf '  │  ✓ Odysseus is ready — opening your browser  │\n'
+        printf '  │  ✓ Origin is ready — opening your browser  │\n'
         printf '  │     %-40s │\n' "$URL"
         printf '  │     (Press Ctrl+C in this window to stop)    │\n'
         printf '  └────────────────────────────────────────────┘\n\n'
@@ -133,7 +133,7 @@ trap - ERR
 trap '[ -n "$POLLER_PID" ] && kill "$POLLER_PID" 2>/dev/null' EXIT INT TERM
 
 echo
-echo "▶ Starting Odysseus — it will open in your browser at $URL"
+echo "▶ Starting Origin — it will open in your browser at $URL"
 echo "  (this takes a few seconds; press Ctrl+C here to stop)"
 echo
 ./venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port "$PORT"

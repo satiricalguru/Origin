@@ -325,22 +325,22 @@ async function _refreshAfterEndpointChange(deletedEndpointId) {
     if (deletedEndpointId && pending && String(pending.endpointId || '') === String(deletedEndpointId)) {
       if (sm.setPendingChat) sm.setPendingChat(null);
     }
-  } catch (_) {}
+  } catch (e) { console.warn('[admin] _refreshAfterEndpointChange step 1:', e); }
   try {
     if (window.modelsModule && window.modelsModule.refreshModels) {
       await window.modelsModule.refreshModels(true);
     }
-  } catch (_) {}
+  } catch (e) { console.warn('[admin] _refreshAfterEndpointChange step 2:', e); }
   try {
     window.dispatchEvent(new CustomEvent('ge:model-endpoints-updated', {
       detail: { deletedEndpointId: deletedEndpointId || null }
     }));
-  } catch (_) {}
+  } catch (e) { console.warn('[admin] _refreshAfterEndpointChange step 3:', e); }
   try {
     if (window.sessionModule && window.sessionModule.updateModelPicker) {
       window.sessionModule.updateModelPicker();
     }
-  } catch (_) {}
+  } catch (e) { console.warn('[admin] _refreshAfterEndpointChange step 4:', e); }
 }
 
 async function _selectAddedModelInChat(endpoint) {
@@ -352,7 +352,7 @@ async function _selectAddedModelInChat(endpoint) {
     }
   } catch (_) {}
   try {
-    document.dispatchEvent(new CustomEvent('odysseus:auto-select-model', {
+    document.dispatchEvent(new CustomEvent('origin:auto-select-model', {
       detail: {
         endpointId: endpoint.id || '',
         endpointName: endpoint.name || '',
@@ -508,7 +508,7 @@ async function loadEndpoints() {
         fetch('/api/model-endpoints/' + epId, { method: 'DELETE' })
           .then(() => _refreshAfterEndpointChange(epId))
           .then(() => loadEndpoints())
-          .catch(() => loadEndpoints());
+          .catch(e => { console.warn('[admin] delete endpoint failed:', e); loadEndpoints(); });
       });
     });
     // Clear the just-added marker now that the row has been rendered
@@ -538,67 +538,125 @@ async function loadEndpoints() {
         }
         if (!_modelsLoaded && isOpen) {
           _modelsLoaded = true;
-          // Our shared whirlpool spinner (consistent with the rest of the app).
-          panel.innerHTML = '';
-          let _modelsSpin = null;
-          const _ld = document.createElement('span');
-          _ld.style.cssText = 'opacity:0.55;font-size:11px;display:inline-flex;align-items:center;gap:8px;';
-          _ld.appendChild(document.createTextNode('Loading models…'));
-          try {
-            const _sp = (await import('./spinner.js')).default;
-            _modelsSpin = _sp.createWhirlpool(14);
-            _modelsSpin.element.style.cssText = 'width:14px;height:14px;margin:0;display:inline-block;';
-            _ld.appendChild(_modelsSpin.element);
-          } catch (_) {}
-          panel.appendChild(_ld);
-          const _stopSpin = () => { try { _modelsSpin && _modelsSpin.stop(); } catch (_) {} };
-          try {
-            const res = await fetch(`/api/model-endpoints/${epId}/models`, { credentials: 'same-origin' });
-            const models = await res.json();
-            _stopSpin();
-            const sortedModels = sortModelObjects(models);
-            if (!sortedModels.length) { panel.innerHTML = '<span style="opacity:0.5;font-size:11px;">No models</span>'; return; }
-            const hiddenSet = new Set(sortedModels.filter(m => m.is_hidden).map(m => m.id));
-            const showSearch = sortedModels.length >= 8;
-            panel.innerHTML = `<div class="mcp-tools-header">
-              <span>Models</span>
-              <span style="display:flex;gap:8px;align-items:center;">
-                <span class="mcp-tools-count">${sortedModels.length - hiddenSet.size}/${sortedModels.length} enabled</span>
-                <a href="#" data-ep-select-all="${epId}">All</a>
-                <a href="#" data-ep-select-none="${epId}">None</a>
-              </span>
-            </div>${showSearch ? `<input type="search" class="mcp-tools-search" placeholder="Search ${sortedModels.length} models..." data-ep-search="${epId}">` : ''}<div class="mcp-tools-list">` + sortedModels.map(m =>
-              `<label title="${esc(m.id)}" data-ep-model-row data-search="${esc((m.display + ' ' + m.id).toLowerCase())}" class="adm-model-row">
-                <input type="checkbox" class="adm-cb-hidden" data-ep-model-id="${esc(m.id)}" ${!m.is_hidden ? 'checked' : ''}>
-                <span class="adm-check-dot" aria-hidden="true"></span>
-                <span>${esc(m.display)}</span>
-              </label>`
-            ).join('') + '</div>';
-            const filterRows = (q) => {
-              const needle = q.trim().toLowerCase();
-              panel.querySelectorAll('[data-ep-model-row]').forEach(row => {
-                row.style.display = (!needle || row.dataset.search.includes(needle)) ? '' : 'none';
+          const ep = data.find(item => String(item.id) === String(epId)) || {};
+
+          const loadAndRenderModels = async () => {
+            // Our shared whirlpool spinner (consistent with the rest of the app).
+            panel.innerHTML = '';
+            let _modelsSpin = null;
+            const _ld = document.createElement('span');
+            _ld.style.cssText = 'opacity:0.55;font-size:11px;display:inline-flex;align-items:center;gap:8px;';
+            _ld.appendChild(document.createTextNode('Loading models…'));
+            try {
+              const _sp = (await import('./spinner.js')).default;
+              _modelsSpin = _sp.createWhirlpool(14);
+              _modelsSpin.element.style.cssText = 'width:14px;height:14px;margin:0;display:inline-block;';
+              _ld.appendChild(_modelsSpin.element);
+            } catch (_) {}
+            panel.appendChild(_ld);
+            const _stopSpin = () => { try { _modelsSpin && _modelsSpin.stop(); } catch (_) {} };
+            try {
+              const res = await fetch(`/api/model-endpoints/${epId}/models`, { credentials: 'same-origin' });
+              const models = await res.json();
+              _stopSpin();
+              const sortedModels = sortModelObjects(models);
+              if (!sortedModels.length) {
+                const freeOnlyChecked = ep.free_only ? 'checked' : '';
+                panel.innerHTML = `<div class="mcp-tools-header">
+                  <span>Models</span>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;margin-bottom:12px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:11px;">
+                  <span style="opacity:0.75;font-weight:500;">Enable free models only</span>
+                  <label class="admin-switch" style="transform:scale(0.8);margin-left:auto;margin-right:0;"><input type="checkbox" data-ep-free-only="${epId}" ${freeOnlyChecked}><span class="admin-slider"></span></label>
+                </div>
+                <span style="opacity:0.5;font-size:11px;display:block;padding:0 4px;">No models found</span>`;
+
+                panel.querySelector(`[data-ep-free-only="${epId}"]`)?.addEventListener('change', async (ev) => {
+                  const checked = ev.target.checked;
+                  try {
+                    await fetch(`/api/model-endpoints/${epId}`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      credentials: 'same-origin',
+                      body: JSON.stringify({ free_only: checked }),
+                    });
+                    ep.free_only = checked;
+                    await loadAndRenderModels();
+                    await _refreshAfterEndpointChange();
+                  } catch (err) {
+                    uiModule.showError('Failed to update free models setting');
+                    ev.target.checked = !checked;
+                  }
+                });
+                return;
+              }
+              const hiddenSet = new Set(sortedModels.filter(m => m.is_hidden).map(m => m.id));
+              const showSearch = sortedModels.length >= 8;
+              const freeOnlyChecked = ep.free_only ? 'checked' : '';
+              panel.innerHTML = `<div class="mcp-tools-header">
+                <span>Models</span>
+                <span style="display:flex;gap:8px;align-items:center;">
+                  <span class="mcp-tools-count">${sortedModels.length - hiddenSet.size}/${sortedModels.length} enabled</span>
+                  <a href="#" data-ep-select-all="${epId}">All</a>
+                  <a href="#" data-ep-select-none="${epId}">None</a>
+                </span>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;margin-bottom:12px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:11px;">
+                <span style="opacity:0.75;font-weight:500;">Enable free models only</span>
+                <label class="admin-switch" style="transform:scale(0.8);margin-left:auto;margin-right:0;"><input type="checkbox" data-ep-free-only="${epId}" ${freeOnlyChecked}><span class="admin-slider"></span></label>
+              </div>
+              ${showSearch ? `<input type="search" class="mcp-tools-search" placeholder="Search ${sortedModels.length} models..." data-ep-search="${epId}">` : ''}<div class="mcp-tools-list">` + sortedModels.map(m =>
+                `<label title="${esc(m.id)}" data-ep-model-row data-search="${esc((m.display + ' ' + m.id).toLowerCase())}" class="adm-model-row">
+                  <input type="checkbox" class="adm-cb-hidden" data-ep-model-id="${esc(m.id)}" ${!m.is_hidden ? 'checked' : ''}>
+                  <span class="adm-check-dot" aria-hidden="true"></span>
+                  <span>${esc(m.display)}</span>
+                </label>`
+              ).join('') + '</div>';
+              const filterRows = (q) => {
+                const needle = q.trim().toLowerCase();
+                panel.querySelectorAll('[data-ep-model-row]').forEach(row => {
+                  row.style.display = (!needle || row.dataset.search.includes(needle)) ? '' : 'none';
+                });
+              };
+              panel.querySelector(`[data-ep-search="${epId}"]`)?.addEventListener('input', (e) => filterRows(e.target.value));
+              panel.querySelector(`[data-ep-select-all="${epId}"]`)?.addEventListener('click', (e) => {
+                e.preventDefault();
+                panel.querySelectorAll('[data-ep-model-row]').forEach(row => {
+                  if (row.style.display !== 'none') row.querySelector('input[type=checkbox]').checked = true;
+                });
+                _saveEpModelState(epId, panel);
               });
-            };
-            panel.querySelector(`[data-ep-search="${epId}"]`)?.addEventListener('input', (e) => filterRows(e.target.value));
-            panel.querySelector(`[data-ep-select-all="${epId}"]`)?.addEventListener('click', (e) => {
-              e.preventDefault();
-              panel.querySelectorAll('[data-ep-model-row]').forEach(row => {
-                if (row.style.display !== 'none') row.querySelector('input[type=checkbox]').checked = true;
+              panel.querySelector(`[data-ep-select-none="${epId}"]`)?.addEventListener('click', (e) => {
+                e.preventDefault();
+                panel.querySelectorAll('[data-ep-model-row]').forEach(row => {
+                  if (row.style.display !== 'none') row.querySelector('input[type=checkbox]').checked = false;
+                });
+                _saveEpModelState(epId, panel);
               });
-              _saveEpModelState(epId, panel);
-            });
-            panel.querySelector(`[data-ep-select-none="${epId}"]`)?.addEventListener('click', (e) => {
-              e.preventDefault();
-              panel.querySelectorAll('[data-ep-model-row]').forEach(row => {
-                if (row.style.display !== 'none') row.querySelector('input[type=checkbox]').checked = false;
+              panel.querySelectorAll('input[type=checkbox].adm-cb-hidden').forEach(cb => {
+                cb.addEventListener('change', () => _saveEpModelState(epId, panel));
               });
-              _saveEpModelState(epId, panel);
-            });
-            panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
-              cb.addEventListener('change', () => _saveEpModelState(epId, panel));
-            });
-          } catch (e) { _stopSpin(); panel.innerHTML = '<span class="admin-error" style="font-size:11px;">Failed to load models</span>'; }
+              panel.querySelector(`[data-ep-free-only="${epId}"]`)?.addEventListener('change', async (ev) => {
+                const checked = ev.target.checked;
+                try {
+                  await fetch(`/api/model-endpoints/${epId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ free_only: checked }),
+                  });
+                  ep.free_only = checked;
+                  await loadAndRenderModels();
+                  await _refreshAfterEndpointChange();
+                } catch (err) {
+                  uiModule.showError('Failed to update free models setting');
+                  ev.target.checked = !checked;
+                }
+              });
+            } catch (e) { _stopSpin(); panel.innerHTML = '<span class="admin-error" style="font-size:11px;">Failed to load models</span>'; }
+          };
+
+          await loadAndRenderModels();
         }
       });
     });
@@ -631,7 +689,7 @@ async function _saveEpModelState(epId, panel) {
     if (settingsModule && typeof settingsModule.refreshAiModelEndpoints === 'function') {
       settingsModule.refreshAiModelEndpoints();
     }
-  } catch (e) { /* silent */ }
+  } catch (e) { console.warn('[admin] toggleMcpTools failed:', e); }
 }
 
 function initEndpointForm() {
@@ -1013,7 +1071,7 @@ function initEndpointForm() {
   document.querySelectorAll('#adm-add-api, #adm-add-local').forEach((sec) => {
     const head = sec.querySelector('.adm-section-toggle');
     if (!head) return;
-    const key = 'odysseus.addModels.' + sec.id + '.open';
+    const key = 'origin.addModels.' + sec.id + '.open';
     let open = false;
     try { open = localStorage.getItem(key) === '1'; } catch {}
     const apply = () => {
@@ -1034,7 +1092,7 @@ function initEndpointForm() {
   document.querySelectorAll('.adm-quickstart-section').forEach((sec) => {
     const head = sec.querySelector('.adm-quickstart-toggle');
     if (!head) return;
-    const key = 'odysseus.addModels.' + sec.id + '.open';
+    const key = 'origin.addModels.' + sec.id + '.open';
     let open = false;
     try { open = localStorage.getItem(key) === '1'; } catch {}
     const apply = () => {
@@ -1318,7 +1376,7 @@ async function loadMcpServers() {
             ${hasTools ? `<span style="font-size:10px;opacity:0.4;">Click to manage tools</span>` : ''}
           </div>
           <div style="display:flex;gap:4px;align-items:center;">
-            ${s.needs_oauth ? `<a href="/api/mcp/oauth/authorize/${s.id}" target="_blank" class="admin-btn-sm" style="background:var(--red);color:#fff;text-decoration:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;">Authorize</a>` : ''}
+            ${s.needs_oauth ? `<a href="/api/mcp/oauth/authorize/${s.id}" target="_blank" rel="noopener noreferrer" class="admin-btn-sm" style="background:var(--red);color:#fff;text-decoration:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;">Authorize</a>` : ''}
             <button class="admin-btn-sm" data-adm-mcp-reconnect="${s.id}">Reconnect</button>
             <button class="admin-btn-delete" style="border-color:${s.is_enabled ? 'color-mix(in srgb, var(--red) 30%, transparent)' : 'color-mix(in srgb, var(--fg) 30%, transparent)'};color:${s.is_enabled ? 'var(--red)' : 'var(--fg)'};" data-adm-mcp-toggle="${s.id}" data-adm-mcp-enable="${!s.is_enabled}">${s.is_enabled ? 'Disable' : 'Enable'}</button>
             <button class="admin-btn-delete" data-adm-mcp-delete="${s.id}">Delete</button>
@@ -1622,7 +1680,7 @@ function initMcpForm() {
       const res = await fetch('/api/mcp/servers', { method: 'POST', body: fd, credentials: 'same-origin' });
       const data = await res.json();
       if (data.needs_oauth) {
-        msg.innerHTML = `Added ${esc(name)} — <a href="/api/mcp/oauth/authorize/${data.id}" target="_blank" style="color:var(--red);font-weight:600;">Authorize with Google</a> to connect`;
+        msg.innerHTML = `Added ${esc(name)} — <a href="/api/mcp/oauth/authorize/${data.id}" target="_blank" rel="noopener noreferrer" style="color:var(--red);font-weight:600;">Authorize with Google</a> to connect`;
         msg.className = 'admin-success';
       } else if (data.connected) {
         msg.textContent = `Added ${name} (${data.tool_count} tools discovered)`; msg.className = 'admin-success';
@@ -1959,7 +2017,7 @@ function initBackup() {
       const blob = await res.blob();
       const disposition = res.headers.get('Content-Disposition') || '';
       const match = disposition.match(/filename=(.+)/);
-      const filename = match ? match[1] : 'odysseus_backup.json';
+      const filename = match ? match[1] : 'origin_backup.json';
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = filename;

@@ -30,7 +30,7 @@ import { suspendDock, resumeDock, clearRightDock, applyEdgeDock } from './modalS
 
 const _state = new Map(); // id -> { restoreFn, closeFn, railBtnId, isMinimized, restoreMinHeight }
 
-const _rememberedDockKey = (id) => `odysseus-modal-remembered-dock-${id}`;
+const _rememberedDockKey = (id) => `origin-modal-remembered-dock-${id}`;
 function _rememberDock(id, side) {
   if (!id || !side) return;
   try { localStorage.setItem(_rememberedDockKey(id), side); } catch (_) {}
@@ -67,7 +67,7 @@ function _bringToFront(modal) {
 
 function _emitModalOpened(id, modal) {
   try {
-    window.dispatchEvent(new CustomEvent('odysseus:modal-opened', {
+    window.dispatchEvent(new CustomEvent('origin:modal-opened', {
       detail: { id, modal },
     }));
   } catch (_) {}
@@ -108,6 +108,7 @@ const _LABELS = {
   'cookbook-modal':    { label: 'Cookbook',  icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>' },
   'calendar-modal':    { label: 'Calendar',  icon: 'M3 4h18v18H3zM16 2v4M8 2v4M3 10h18' },
   'gallery-modal':     { label: 'Gallery',   icon: 'M3 3h18v18H3zM8.5 8.5l3 3M21 15l-5-5L5 21' },
+  'ide-modal':         { label: 'IDE',       icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="9" y1="9" x2="21" y2="9"/></svg>' },
   'tasks-modal':       { label: 'Tasks',     icon: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' },
   'doclib-modal':      { label: 'Library',   icon: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h6M9 11h4' },
   // Full SVG markup (not a single path-d) — the rounded-lobe brain needs
@@ -155,7 +156,7 @@ let _dockPos = null; // { left, top } | null
 const _renderedChipIds = new Set();
 
 // ── Persistence (mobile dock + free-chip positions) ──
-const _DOCK_STORAGE_KEY = 'odysseus.mobileDockState.v1';
+const _DOCK_STORAGE_KEY = 'origin.mobileDockState.v1';
 let _dockStateLoaded = false;
 
 function _saveDockState() {
@@ -1395,6 +1396,7 @@ const _AUTO_WIRE = {
   // wiring it here makes tab-down use the new .minimized-dock-chip instead of
   // the legacy .modal-dock-item.
   'custom-preset-modal':  { rail: null,             sidebar: null },
+  'ide-modal':            { rail: 'rail-ide',       sidebar: 'tool-ide-btn' },
 };
 
 function _autoRegister(id) {
@@ -1447,6 +1449,7 @@ const _SWIPE_DOWN_MINIMIZES = new Set([
   'cookbook-modal',
   'calendar-modal',
   'email-lib-modal',
+  'ide-modal',
 ]);
 // Same idea but matched by id prefix — so dynamically-created modals
 // (per-email reader tabs) survive swipe-down too.

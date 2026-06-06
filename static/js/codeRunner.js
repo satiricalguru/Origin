@@ -293,12 +293,12 @@ console.log = function() { _logs.push([].map.call(arguments, function(a) { try {
 console.warn = function() { _logs.push('[warn] ' + [].map.call(arguments, String).join(' ')); };
 console.error = function() { _logs.push('[error] ' + [].map.call(arguments, String).join(' ')); };
 try {
-  var _timer = setTimeout(function() { parent.postMessage({error:'Execution timed out (10 s)'},'*'); }, 10000);
+  var _timer = setTimeout(function() { parent.postMessage({error:'Execution timed out (10 s)'},parent.location.origin); }, 10000);
   ${code.replace(/<\/script>/gi, '<\\/script>')}
   clearTimeout(_timer);
-  parent.postMessage({logs: _logs}, '*');
+  parent.postMessage({logs: _logs}, parent.location.origin);
 } catch(e) {
-  parent.postMessage({error: e.toString()}, '*');
+  parent.postMessage({error: e.toString()}, parent.location.origin);
 }
 <\/script></body></html>`;
 

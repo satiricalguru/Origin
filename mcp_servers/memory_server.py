@@ -2,7 +2,7 @@
 memory_server.py
 
 MCP server exposing memory management (list, add, edit, delete, search).
-Imports MemoryManager and MemoryVectorStore from the Odysseus codebase.
+Imports MemoryManager and MemoryVectorStore from the Origin codebase.
 """
 
 import asyncio
@@ -127,17 +127,22 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if not memory_id or not new_text:
             return [TextContent(type="text", text="Error: edit needs memory_id and text")]
         memories = _memory_manager.load_all()
+        # Require the full memory_id (UUID8) — `startswith` matching on
+        # the first 8 chars has a non-trivial collision rate, and a
+        # destructive op (edit/delete) silently targeting the wrong
+        # memory is the worst kind of footgun. If callers really want
+        # short ids, they can `list` first to look up the full id.
         found = False
         full_id = None
         for m in memories:
-            if m.get("id", "").startswith(memory_id):
+            if m.get("id", "") == memory_id:
                 m["text"] = new_text
                 m["timestamp"] = int(time.time())
                 found = True
                 full_id = m["id"]
                 break
         if not found:
-            return [TextContent(type="text", text=f"Error: Memory '{memory_id}' not found")]
+            return [TextContent(type="text", text=f"Error: Memory '{memory_id}' not found (full id required, use `list` to look up)")]
         _memory_manager.save(memories)
         if _memory_vector and _memory_vector.healthy and full_id:
             try:
@@ -152,19 +157,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if not memory_id:
             return [TextContent(type="text", text="Error: delete needs memory_id")]
         memories = _memory_manager.load_all()
+        # See the comment in `edit` — full-id match only.
         full_id = None
         deleted_text = ""
         deleted_category = ""
         for m in memories:
-            if m.get("id", "").startswith(memory_id):
+            if m.get("id", "") == memory_id:
                 full_id = m["id"]
                 deleted_text = m.get("text", "")
                 deleted_category = m.get("category", "")
                 break
         original_len = len(memories)
-        memories = [m for m in memories if not m.get("id", "").startswith(memory_id)]
+        memories = [m for m in memories if m.get("id", "") != memory_id]
         if len(memories) == original_len:
-            return [TextContent(type="text", text=f"Error: Memory '{memory_id}' not found")]
+            return [TextContent(type="text", text=f"Error: Memory '{memory_id}' not found (full id required, use `list` to look up)")]
         _memory_manager.save(memories)
         if _memory_vector and _memory_vector.healthy and full_id:
             try:

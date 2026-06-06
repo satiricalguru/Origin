@@ -59,7 +59,7 @@ class SessionManager:
         db = SessionLocal()
         try:
             db_sessions = db.query(DbSession).filter(
-                DbSession.archived == False,
+                DbSession.archived.is_(False),
                 DbSession.message_count > 0,
             ).order_by(DbSession.last_accessed.desc()).limit(100).all()
 
@@ -113,8 +113,12 @@ class SessionManager:
         # Try relationship first, then direct query
         if db_session.messages:
             for db_msg in db_session.messages:
-                meta = json.loads(db_msg.meta_data) if db_msg.meta_data else {}
-                if meta is None: meta = {}
+                try:
+                    meta = json.loads(db_msg.meta_data) if db_msg.meta_data else {}
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
                 meta['_db_id'] = db_msg.id
                 meta.setdefault('timestamp', _message_timestamp_iso(db_msg.timestamp))
                 history.append(ChatMessage(
@@ -128,8 +132,12 @@ class SessionManager:
             ).order_by(DbChatMessage.timestamp).all()
 
             for db_msg in db_messages:
-                meta = json.loads(db_msg.meta_data) if db_msg.meta_data else {}
-                if meta is None: meta = {}
+                try:
+                    meta = json.loads(db_msg.meta_data) if db_msg.meta_data else {}
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
                 meta['_db_id'] = db_msg.id
                 meta.setdefault('timestamp', _message_timestamp_iso(db_msg.timestamp))
                 history.append(ChatMessage(
@@ -188,7 +196,7 @@ class SessionManager:
         db = SessionLocal()
         try:
             msg_id = str(uuid.uuid4())
-            msg_time = datetime.utcnow()
+            msg_time = datetime.now(timezone.utc)
             if message.metadata is None:
                 message.metadata = {}
             message.metadata.setdefault('timestamp', _message_timestamp_iso(msg_time))
@@ -204,7 +212,7 @@ class SessionManager:
 
             db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
             if db_session:
-                db_session.message_count = len(self.sessions.get(session_id, {}).history) if session_id in self.sessions else 0
+                db_session.message_count = len(self.sessions[session_id].history) if session_id in self.sessions else 0
                 _now = datetime.now(timezone.utc)
                 db_session.last_accessed = _now
                 # Clean "last conversation" timestamp — only bumped here on a
@@ -411,7 +419,8 @@ class SessionManager:
         endpoint_url: str,
         model: str,
         rag: bool = False,
-        owner: str = None
+        owner: str = None,
+        headers: Optional[dict] = None
     ) -> Session:
         """Create a new session and save to database."""
         db = SessionLocal()
@@ -422,7 +431,7 @@ class SessionManager:
                 endpoint_url=endpoint_url,
                 model=model,
                 rag=rag,
-                headers={},
+                headers=headers or {},
                 owner=owner,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc)
@@ -436,7 +445,7 @@ class SessionManager:
                 endpoint_url=endpoint_url,
                 model=model,
                 rag=rag,
-                headers={},
+                headers=headers or {},
                 owner=owner,
             )
 

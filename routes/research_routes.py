@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -309,14 +309,14 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         from src.auth_helpers import require_privilege
         user = require_privilege(request, "can_use_research")
         if user == "internal-tool":
-            tool_owner = (request.headers.get("X-Odysseus-Owner") or "").strip()
+            tool_owner = (request.headers.get("X-Origin-Owner") or "").strip()
             if tool_owner and tool_owner not in {"internal-tool", "api", "demo", "system"}:
                 auth_mgr = getattr(request.app.state, "auth_manager", None)
                 if auth_mgr is not None and getattr(auth_mgr, "is_configured", False):
                     try:
                         privs = auth_mgr.get_privileges(tool_owner) or {}
                         if not privs.get("can_use_research", True):
-                            raise HTTPException(403, f"Your account is not allowed to can use research.")
+                            raise HTTPException(403, "Your account is not allowed to use research.")
                     except HTTPException:
                         raise
                     except Exception:
@@ -583,7 +583,7 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         # The user can open the visual report for source details; keeping sources
         # out of the chat context saves tokens and avoids the AI fabricating
         # citations.
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         primer = (
             f"[Research context — {date_str}]\n\n"
             f"The user previously ran a deep research investigation. Use the "

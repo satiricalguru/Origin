@@ -26,7 +26,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,13 @@ def _sync_blocking(owner: str, url: str, username: str, password: str) -> dict:
     Returns counts: {calendars, events, deleted, errors}."""
     # Lazy imports so a missing `caldav` dep doesn't break app startup —
     # the integrations form still works, sync just no-ops with an error.
-    import caldav
+    from caldav import DAVClient
     from caldav.lib.error import AuthorizationError, NotFoundError
     from core.database import CalendarCal, CalendarEvent, SessionLocal
 
     result = {"calendars": 0, "events": 0, "deleted": 0, "errors": []}
 
-    client = caldav.DAVClient(url=url, username=username, password=password)
+    client = DAVClient(url=url, username=username, password=password)
 
     # Discovery: try principal → calendars first; if the server doesn't
     # support discovery (or the URL points directly at a calendar), fall
@@ -94,8 +94,8 @@ def _sync_blocking(owner: str, url: str, username: str, password: str) -> dict:
             result["errors"].append(f"No calendars and URL fallback failed: {e}")
             return result
 
-    start = datetime.utcnow() - timedelta(days=_LOOKBACK_DAYS)
-    end = datetime.utcnow() + timedelta(days=_LOOKAHEAD_DAYS)
+    start = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_LOOKBACK_DAYS)
+    end = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=_LOOKAHEAD_DAYS)
 
     db = SessionLocal()
     try:
@@ -123,7 +123,7 @@ def _sync_blocking(owner: str, url: str, username: str, password: str) -> dict:
                     # Refresh the display name if the user renamed it
                     # remotely; preserve any local color override.
                     if local_cal.name != display_name:
-                        local_cal.name = display_name
+                        local_cal.name = display_name  # type: ignore
                         db.commit()
                 result["calendars"] += 1
 
@@ -190,15 +190,15 @@ def _sync_blocking(owner: str, url: str, username: str, password: str) -> dict:
                             CalendarEvent.uid == uid_val,
                         ).first()
                         if existing:
-                            existing.calendar_id = local_cal.id
-                            existing.summary = summary
-                            existing.description = description
-                            existing.location = location
-                            existing.dtstart = start_dt
-                            existing.dtend = end_dt
-                            existing.all_day = all_day
-                            existing.is_utc = row_is_utc
-                            existing.rrule = rrule
+                            existing.calendar_id = local_cal.id  # type: ignore
+                            existing.summary = summary  # type: ignore
+                            existing.description = description  # type: ignore
+                            existing.location = location  # type: ignore
+                            existing.dtstart = start_dt  # type: ignore
+                            existing.dtend = end_dt  # type: ignore
+                            existing.all_day = all_day  # type: ignore
+                            existing.is_utc = row_is_utc  # type: ignore
+                            existing.rrule = rrule  # type: ignore
                         else:
                             new_ev = CalendarEvent(
                                 uid=uid_val,

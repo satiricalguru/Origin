@@ -2,7 +2,7 @@
 """Minimal OpenAI-compatible image generation API server using diffusers.
 
 Serves /v1/images/generations and /v1/models for compatibility with
-Odysseus's image generation tool.
+Origin's image generation tool.
 
 Usage:
     python3 scripts/diffusion_server.py --model /path/to/model --port 8100
@@ -52,7 +52,23 @@ async def lifespan(application):
 
 
 app = FastAPI(title="Diffusion Server", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS — restrict to the local dev origins Origin itself uses. The
+# `*` wildcard was fine when this script was a one-off playground,
+# but the GPU cost makes it a free attack surface if the script is
+# ever exposed behind a tunnel. Loopback-only by default; set
+# DIFFUSION_ALLOW_ORIGINS to a comma-separated list to widen.
+_allowed = os.environ.get(
+    "DIFFUSION_ALLOW_ORIGINS",
+    "http://localhost,http://127.0.0.1,http://localhost:7000,http://127.0.0.1:7000,http://localhost:7860,http://127.0.0.1:7860",
+)
+_allowed_origins = [o.strip() for o in _allowed.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
 
 class ImageRequest(BaseModel):

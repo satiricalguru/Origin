@@ -25,7 +25,7 @@ import html
 from html.parser import HTMLParser as _HTMLParser
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from email.mime.text import MIMEText
@@ -53,7 +53,27 @@ from routes.email_pollers import _start_poller
 
 logger = logging.getLogger(__name__)
 
-ODYSSEUS_MAIL_ORIGIN = "odysseus-ui"
+ORIGIN_MAIL_ORIGIN = "origin-ui"
+
+
+def _clamp_port(raw, default: int) -> int:
+    """Clamp a user-supplied TCP port to the legal range (1..65535).
+
+    `int(raw)` accepts arbitrary integers, so without this guard a JSON
+    body of `{"imap_port": -1}` or `{"imap_port": 99999}` would persist
+    to the DB and then blow up the IMAP/SMTP connect later with a
+    confusing `gaierror`/`EINVAL`. Returns `default` when the value is
+    None/empty/non-numeric.
+    """
+    if raw is None or raw == "":
+        return int(default)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+    if n < 1 or n > 65535:
+        return int(default)
+    return n
 
 
 def _email_tag_owner_aliases(account_id: str | None, owner: str = "") -> list[str]:
@@ -96,7 +116,7 @@ def _record_email_received_events(owner: str, account_id: str | None, folder: st
     try:
         from src.event_bus import fire_event
         account_key = (account_id or "default").strip() or "default"
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         keys = []
         for e in emails:
             key = (e.get("message_id") or e.get("uid") or "").strip()
@@ -303,12 +323,12 @@ def _move_email_message(conn, uid: str, dest: str, role: str = "") -> bool:
     return False
 
 
-def _apply_odysseus_headers(msg, kind: str | None = None, ref_id: str | None = None):
-    msg["X-Odysseus-Origin"] = ODYSSEUS_MAIL_ORIGIN
+def _apply_origin_headers(msg, kind: str | None = None, ref_id: str | None = None):
+    msg["X-Origin-Origin"] = ORIGIN_MAIL_ORIGIN
     if kind:
-        msg["X-Odysseus-Kind"] = re.sub(r"[^A-Za-z0-9_.-]", "-", kind)[:64]
+        msg["X-Origin-Kind"] = re.sub(r"[^A-Za-z0-9_.-]", "-", kind)[:64]
     if ref_id:
-        msg["X-Odysseus-Ref"] = re.sub(r"[^A-Za-z0-9_.:-]", "-", ref_id)[:128]
+        msg["X-Origin-Ref"] = re.sub(r"[^A-Za-z0-9_.:-]", "-", ref_id)[:128]
 
 
 def _md_to_email_html(text: str) -> str:
@@ -614,24 +634,24 @@ def setup_email_routes():
                 # All emails NOT marked as answered/done (read or unread).
                 status, data = _imap_uid_search(conn, f"(UNANSWERED{from_clause})")
             elif filter_ == "reminders":
-                # Prefer the Odysseus marker header, but include the subject
-                # fallback too. The fallback uses a distinct Odysseus prefix
+                # Prefer the Origin marker header, but include the subject
+                # fallback too. The fallback uses a distinct Origin prefix
                 # so ordinary emails containing "Reminder" don't get mixed in.
                 status, data = _imap_uid_search(
                     conn,
-                    f'(OR HEADER X-Odysseus-Kind "reminder" SUBJECT "Reminder (Odysseus):"{from_clause})',
+                    f'(OR HEADER X-Origin-Kind "reminder" SUBJECT "Reminder (Origin):"{from_clause})',
                 )
             elif filter_ == "pending_30d":
                 # "What's pending in the last month" — UNANSWERED + delivered
                 # within the last 30 days. SINCE takes a DD-Mon-YYYY date.
-                from datetime import datetime as _dt, timedelta as _td
-                _since = (_dt.utcnow() - _td(days=30)).strftime("%d-%b-%Y")
+                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                _since = (_dt.now(_tz.utc) - _td(days=30)).strftime("%d-%b-%Y")
                 status, data = _imap_uid_search(conn, f'(UNANSWERED SINCE "{_since}"{from_clause})')
             elif filter_ == "stale_30d":
                 # "What's been sitting too long" — UNANSWERED + delivered
                 # MORE than 30 days ago. BEFORE excludes the cutoff date itself.
-                from datetime import datetime as _dt, timedelta as _td
-                _before = (_dt.utcnow() - _td(days=30)).strftime("%d-%b-%Y")
+                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                _before = (_dt.now(_tz.utc) - _td(days=30)).strftime("%d-%b-%Y")
                 status, data = _imap_uid_search(conn, f'(UNANSWERED BEFORE "{_before}"{from_clause})')
             elif filter_ and filter_.startswith("tag:"):
                 # Tag-based filter — resolve UIDs from email_tags first, then
@@ -1496,7 +1516,7 @@ def setup_email_routes():
                 )
 
                 upload_id = f"{uuid.uuid4().hex}.pdf"
-                today = datetime.utcnow().strftime("%Y/%m/%d")
+                today = datetime.now(timezone.utc).strftime("%Y/%m/%d")
                 dated_dir = _os.path.join(UPLOAD_DIR, today)
                 _os.makedirs(dated_dir, exist_ok=True)
                 dest_path = _os.path.join(dated_dir, upload_id)
@@ -1713,13 +1733,13 @@ def setup_email_routes():
             logger.error(f"Failed to permanently delete email {uid}: {e}")
             return {"success": False, "error": "Mail operation failed"}
 
-    @router.delete("/odysseus/reminders")
-    async def delete_odysseus_reminder_emails(
+    @router.delete("/origin/reminders")
+    async def delete_origin_reminder_emails(
         account_id: str | None = Query(None),
         permanent: bool = Query(False),
         owner: str = Depends(require_owner),
     ):
-        """Delete email messages stamped as Odysseus reminders."""
+        """Delete email messages stamped as Origin reminders."""
         if account_id:
             _assert_owns_account(account_id, owner)
         deleted = 0
@@ -1757,12 +1777,12 @@ def setup_email_routes():
                         # Match the Reminders filter: new messages have the
                         # explicit kind header, and subject fallback catches
                         # clients/providers that stripped custom headers.
-                        uids.update(_search_uids(conn, f'(HEADER X-Odysseus-Kind {_search_quote("reminder")})'))
-                        uids.update(_search_uids(conn, f'(SUBJECT {_search_quote("Reminder (Odysseus):")})'))
+                        uids.update(_search_uids(conn, f'(HEADER X-Origin-Kind {_search_quote("reminder")})'))
+                        uids.update(_search_uids(conn, f'(SUBJECT {_search_quote("Reminder (Origin):")})'))
                         for addr in own_addrs:
                             addr_q = _search_quote(addr)
-                            uids.update(_search_uids(conn, f'(FROM {addr_q} SUBJECT {_search_quote("Reminder (Odysseus):")})'))
-                            # Legacy reminders created before the Odysseus
+                            uids.update(_search_uids(conn, f'(FROM {addr_q} SUBJECT {_search_quote("Reminder (Origin):")})'))
+                            # Legacy reminders created before the Origin
                             # prefix still came from this mailbox as
                             # "Reminder: ..."; include them in Clear without
                             # sweeping unrelated external reminder emails.
@@ -1785,7 +1805,7 @@ def setup_email_routes():
             _invalidate_list_cache(account_id)
             return {"success": True, "deleted": deleted, "folders_checked": folders_checked}
         except Exception as e:
-            logger.error(f"delete_odysseus_reminder_emails failed: {e}")
+            logger.error(f"delete_origin_reminder_emails failed: {e}")
             return {"success": False, "error": "Mail operation failed"}
 
     @router.post("/move/{uid}")
@@ -1889,7 +1909,7 @@ def setup_email_routes():
 
     async def _send_email_sync(
         to, cc, bcc, subject, body, in_reply_to, references, attachments,
-        account_id=None, owner="", odysseus_kind=None, odysseus_ref=None,
+        account_id=None, owner="", origin_kind=None, origin_ref=None,
     ):
         """Shared send logic used by both /send and scheduled delivery.
 
@@ -1912,8 +1932,8 @@ def setup_email_routes():
         if cc:
             outer["Cc"] = cc
         outer["Subject"] = subject or ""
-        outer["Date"] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
-        _apply_odysseus_headers(outer, odysseus_kind or "scheduled", odysseus_ref)
+        outer["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        _apply_origin_headers(outer, origin_kind or "scheduled", origin_ref)
         if in_reply_to:
             outer["In-Reply-To"] = in_reply_to
         if references:
@@ -1957,7 +1977,7 @@ def setup_email_routes():
                 parsed_at = _dt.fromisoformat(send_at.replace("Z", "+00:00"))
             except ValueError:
                 return {"success": False, "error": "send_at must be ISO8601"}
-            now_utc = _dt.now(_tz.utc) if parsed_at.tzinfo else _dt.utcnow()
+            now_utc = _dt.now(_tz.utc) if parsed_at.tzinfo else _dt.now(_tz.utc).replace(tzinfo=None)
             # Tiny 30s grace so a user clicking Send right at the chosen
             # minute doesn't trip the past-time guard.
             if parsed_at < now_utc:
@@ -1967,7 +1987,7 @@ def setup_email_routes():
             conn = sqlite3.connect(SCHEDULED_DB)
             conn.execute("""
                 INSERT INTO scheduled_emails
-                (id, to_addr, cc, bcc, subject, body, in_reply_to, references_hdr, attachments, send_at, created_at, status, account_id, odysseus_kind)
+                (id, to_addr, cc, bcc, subject, body, in_reply_to, references_hdr, attachments, send_at, created_at, status, account_id, origin_kind)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
             """, (
                 sid,
@@ -1980,9 +2000,9 @@ def setup_email_routes():
                 req.get("references") or None,
                 json.dumps(req.get("attachments") or []),
                 send_at,
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
                 req.get("account_id") or None,
-                req.get("odysseus_kind") or "scheduled",
+                req.get("origin_kind") or "scheduled",
             ))
             conn.commit()
             conn.close()
@@ -2106,15 +2126,15 @@ def setup_email_routes():
         if req.cc:
             outer["Cc"] = req.cc
         outer["Subject"] = req.subject
-        outer["Date"] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
-        outer["Message-ID"] = email.utils.make_msgid(domain="odysseus.local")
+        outer["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        outer["Message-ID"] = email.utils.make_msgid(domain="origin.local")
 
         if req.in_reply_to:
             outer["In-Reply-To"] = req.in_reply_to
         if req.references:
             outer["References"] = req.references
-        if req.odysseus_kind:
-            _apply_odysseus_headers(outer, req.odysseus_kind)
+        if req.origin_kind:
+            _apply_origin_headers(outer, req.origin_kind)
 
         # Plain + HTML body. Escape user content so a `<script>` or
         # `<img onerror=...>` paste in compose doesn't end up as live HTML
@@ -2282,7 +2302,7 @@ def setup_email_routes():
         if req.bcc:
             msg["Bcc"] = req.bcc
         msg["Subject"] = req.subject
-        msg["Date"] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
+        msg["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
 
         if req.in_reply_to:
             msg["In-Reply-To"] = req.in_reply_to
@@ -2513,7 +2533,7 @@ def setup_email_routes():
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         mid, data.get("uid", ""), data.get("folder", ""),
-                        subject, sender, content, model, datetime.utcnow().isoformat(),
+                        subject, sender, content, model, datetime.now(timezone.utc).isoformat(),
                     ))
                     _c.commit()
                     _c.close()
@@ -2730,7 +2750,7 @@ def setup_email_routes():
                         INSERT OR REPLACE INTO email_ai_replies
                         (message_id, uid, folder, reply, model_used, created_at)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (message_id, source_uid, source_folder, reply, model, datetime.utcnow().isoformat()))
+                    """, (message_id, source_uid, source_folder, reply, model, datetime.now(timezone.utc).isoformat()))
                     _c.commit()
                     _c.close()
                 except Exception as e:
@@ -2897,6 +2917,11 @@ def setup_email_routes():
         name = (data.get("name") or "").strip()
         if not name:
             return {"ok": False, "error": "name required"}
+        # Clamp ports to the legal TCP range. 0/1/-1/99999 all parse fine
+        # but let imaplib probe weird services. We keep the "default"
+        # sentinel via `or` so 0/falsy = use the protocol default.
+        imap_port = _clamp_port(data.get("imap_port"), default=993)
+        smtp_port = _clamp_port(data.get("smtp_port"), default=465)
         db = SessionLocal()
         try:
             row = EmailAccount(
@@ -2905,12 +2930,12 @@ def setup_email_routes():
                 is_default=bool(data.get("is_default", False)),
                 enabled=bool(data.get("enabled", True)),
                 imap_host=(data.get("imap_host") or "").strip(),
-                imap_port=int(data.get("imap_port") or 993),
+                imap_port=imap_port,
                 imap_user=(data.get("imap_user") or "").strip(),
                 imap_password=_enc(data.get("imap_password") or ""),
                 imap_starttls=bool(data.get("imap_starttls", True)),
                 smtp_host=(data.get("smtp_host") or "").strip(),
-                smtp_port=int(data.get("smtp_port") or 465),
+                smtp_port=smtp_port,
                 smtp_user=(data.get("smtp_user") or "").strip(),
                 smtp_password=_enc(data.get("smtp_password") or ""),
                 from_address=(data.get("from_address") or "").strip(),
@@ -2953,7 +2978,10 @@ def setup_email_routes():
                     setattr(row, key, (data[key] or "").strip())
             for key in ("imap_port", "smtp_port"):
                 if data.get(key) not in (None, ""):
-                    setattr(row, key, int(data[key]))
+                    # Clamp to the legal TCP port range so a request
+                    # with port 0/99999/-1 doesn't get persisted and
+                    # blow up the IMAP/SMTP connect later.
+                    setattr(row, key, _clamp_port(data[key], default=0) or getattr(row, key))
             for key in ("imap_starttls", "enabled"):
                 if key in data:
                     setattr(row, key, bool(data[key]))

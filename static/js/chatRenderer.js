@@ -118,7 +118,7 @@ function buildAttachCards(attachments) {
         };
         img.addEventListener('load', _reveal);
         img.addEventListener('error', _reveal);
-        img.src = att.previewUrl || `/api/upload/${att.id}?thumb=1`;
+        img.src = (att.previewUrl && /^https?:\/\//.test(att.previewUrl)) ? att.previewUrl : `/api/upload/${att.id}?thumb=1`;
         // Cached images can be complete before the load listener attaches.
         if (img.complete && img.naturalWidth) _reveal();
         // Failsafe: if neither load nor error fires within 8s, reveal anyway.
@@ -1235,7 +1235,7 @@ export function showWelcomeScreen() {
 }
 
 // ── Dynamic action buttons (show 3 most recent, rest under ···) ──
-const _ACTION_RECENTS_KEY = 'odysseus-msg-actions-recent';
+const _ACTION_RECENTS_KEY = 'origin-msg-actions-recent';
 const _MAX_VISIBLE = 2;
 
 function _getRecentActions() {
@@ -1455,7 +1455,7 @@ export function createMsgFooter(msgElement) {
 /**
  * Create a footer row for a user message with action buttons (same system as AI footer).
  */
-const _USER_ACTION_RECENTS_KEY = 'odysseus-user-actions-recent';
+const _USER_ACTION_RECENTS_KEY = 'origin-user-actions-recent';
 
 function _getUserRecentActions() {
   try { return JSON.parse(localStorage.getItem(_USER_ACTION_RECENTS_KEY) || '[]'); } catch { return []; }
@@ -1763,7 +1763,7 @@ export function displayMetrics(messageElement, metrics) {
           compactMsg.className = 'msg msg-ai';
           const compactRole = document.createElement('div');
           compactRole.className = 'role';
-          compactRole.textContent = 'Odysseus';
+          compactRole.textContent = 'Origin';
           const compactBody = document.createElement('div');
           compactBody.className = 'body';
           compactBody.innerHTML = 'Compacting context <span class="compact-wave">▁▂▃▅▂▁</span>';
@@ -2002,7 +2002,7 @@ export function addMessage(role, content, modelName, metadata) {
     const isSlash = metadata?.source === 'slash';
     const isCompacted = metadata?.compacted;
     const resolvedModel = modelName || metadata?.model;
-    var _roleText = role === 'user' ? 'You' : (isSlash || isCompacted) ? 'Odysseus' : shortModel(resolvedModel);
+    var _roleText = role === 'user' ? 'You' : (isSlash || isCompacted) ? 'Origin' : shortModel(resolvedModel);
     if (role === 'assistant' && (metadata?.research || metadata?.research_clarification)) {
       _roleText += ' (Research)';
     }

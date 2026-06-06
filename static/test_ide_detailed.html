@@ -1,0 +1,14 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>IDE Test Detail</title></head><body>
+<pre id="o"></pre>
+<script type="module">
+const o = document.getElementById('o');
+o.textContent += 'Step 1: Starting import...\n';
+try {
+    const mod = await import('./js/ide.js');
+    o.textContent += 'SUCCESS: Module loaded\n';
+    o.textContent += 'Exports: ' + Object.keys(mod.default||{}).join(', ') + '\n';
+} catch (e) {
+    o.textContent += 'FAILED: ' + e.message + '\n';
+    o.textContent += 'Stack:\n' + (e.stack || '') + '\n';
+}
+</script></body></html>

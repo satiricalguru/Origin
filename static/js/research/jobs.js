@@ -9,7 +9,7 @@ let _idCounter = 0;
 
 // Dismissed-from-panel IDs persist across reloads so Clear actually sticks.
 // (Items still live on disk and in the Library; this just hides them here.)
-const _DISMISSED_KEY = 'odysseus-research-dismissed';
+const _DISMISSED_KEY = 'origin-research-dismissed';
 function _loadDismissed() {
   try {
     const raw = localStorage.getItem(_DISMISSED_KEY);
@@ -274,7 +274,7 @@ function _connectStream(job) {
         return;
       }
       _notify();
-    } catch {}
+    } catch (e) { console.warn('[research] failed to parse SSE event:', e); }
   };
 
   es.onerror = () => {

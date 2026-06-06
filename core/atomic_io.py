@@ -9,6 +9,11 @@ that's a data-loss event.
 
 `atomic_write_json` writes to a sibling tmp file, fsyncs, then `os.replace`s
 into place. On POSIX `os.replace` is atomic on the same filesystem.
+
+If the JSON serialization or write itself raises, the half-written
+`.tmp.<pid>` file is removed in the except block — otherwise repeated
+failed settings writes (e.g. unserializable object, RecursionError from a
+cycle) pile up `data/foo.json.tmp.12345` files.
 """
 
 from __future__ import annotations
@@ -26,18 +31,37 @@ def atomic_write_json(path: str, data: Any, *, indent: Optional[int] = None) -> 
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=indent)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # If anything before the atomic rename failed (serialization,
+        # permission, disk full), don't leave a half-written .tmp file
+        # sitting in the data dir. Re-raise the original exception.
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def atomic_write_text(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        raise

@@ -41,6 +41,16 @@ export function initSidebarLayout(Storage, opts) {
     const isRight = sidebar.classList.contains('right-side');
     const sidebarHidden = sidebar.classList.contains('hidden');
     const railHidden = iconRail.classList.contains('rail-hidden');
+
+    // Clear stale mobile-mini state when on desktop — if this class is left
+    // behind after a tool closes or the viewport widens, the display:none
+    // branch below gets skipped and BOTH the icon rail and the full sidebar
+    // end up visible at the same time (the "stuck sidebar" bug).
+    if (window.innerWidth >= 768 && iconRail.classList.contains('mobile-mini')) {
+      iconRail.classList.remove('mobile-mini');
+      iconRail.style.cssText = '';
+    }
+
     const isMobileMini = iconRail.classList.contains('mobile-mini');
     iconRail.classList.toggle('right-side', isRight);
     // On mobile mini mode, JS already set inline styles — don't touch
@@ -55,6 +65,16 @@ export function initSidebarLayout(Storage, opts) {
       }
     } else {
       iconRail.style.display = (sidebarHidden && !railHidden) ? '' : 'none';
+    }
+    // Invariant: when the full sidebar is visible the icon rail MUST be
+    // hidden — they're mutually exclusive presentations of the same panel.
+    // `display: flex !important` from the mobile-mini media query (style.css
+    // ~L3826) can otherwise win over the inline `display: none` set above if
+    // the `mobile-mini` class leaks across a viewport change. Enforce it here
+    // so both states can't be on-screen at once (the "stuck sidebar" bug).
+    if (!sidebarHidden) {
+      iconRail.style.display = 'none';
+      iconRail.classList.remove('mobile-mini');
     }
     // Hamburger is always visible — just update body classes for CSS layout adjustments
     if (hamburgerBtn) {
@@ -163,6 +183,7 @@ export function initSidebarLayout(Storage, opts) {
           // Closing sidebar
           sidebar.classList.add('hidden');
           if (backdrop) backdrop.classList.remove('visible');
+          if (iconRail) { iconRail.classList.remove('mobile-mini'); iconRail.style.cssText = ''; }
         } else {
           // Mobile: the hamburger always opens the sidebar from the RIGHT.
           // (Not persisted — keeps the desktop side preference untouched.)
@@ -220,7 +241,7 @@ export function initSidebarLayout(Storage, opts) {
   }
 
   // Auto-collapse sidebar when window gets small or chat area is squeezed
-  const AUTO_COLLAPSE_WIDTH = 700;
+  const AUTO_COLLAPSE_WIDTH = 768;
   const MIN_CHAT_WIDTH = 380; // collapse sidebar if chat gets narrower than this
 
   function checkSidebarAutoCollapse() {
@@ -346,7 +367,7 @@ export function initSidebarLayout(Storage, opts) {
 
   // ── Click outside sidebar / icon rail to close (mobile only) ──
   document.addEventListener('click', (e) => {
-    if (window.innerWidth >= 700) return; // desktop keeps sidebar open
+    if (window.innerWidth >= AUTO_COLLAPSE_WIDTH) return; // desktop keeps sidebar open
     const sb = document.getElementById('sidebar');
     const rail = document.getElementById('icon-rail');
     // Ignore clicks on elements removed from DOM (e.g. session list re-render during folder toggle)
@@ -388,7 +409,7 @@ export function initSidebarLayout(Storage, opts) {
   let _sidebarWasOpenBeforeTool = false;
   let _railWasOpenBeforeTool = false;
   document.addEventListener('click', (e) => {
-    if (window.innerWidth >= 700) return;
+    if (window.innerWidth >= AUTO_COLLAPSE_WIDTH) return;
     const btn = e.target.closest('[id^="tool-"], [id^="rail-"]');
     if (!btn) return;
     setTimeout(() => {
@@ -426,7 +447,7 @@ export function initSidebarLayout(Storage, opts) {
   // whatever state it was in before the tool was opened. ──
   // We watch every .modal for the .hidden class going on, and if our
   // remembered "sidebar-was-open" flag is set, undo the auto-close.
-  if (window.innerWidth < 700) {
+  if (window.innerWidth < AUTO_COLLAPSE_WIDTH) {
     const _restoreSidebar = () => {
       const sb = document.getElementById('sidebar');
       const rail = document.getElementById('icon-rail');
@@ -440,14 +461,20 @@ export function initSidebarLayout(Storage, opts) {
         .some(m => (!m.classList.contains('hidden') && getComputedStyle(m).display !== 'none')
                    || m.classList.contains('modal-minimized'));
       const anyDocked = document.querySelectorAll('.minimized-dock-chip').length > 0;
-      if (anyOpen || anyDocked) {
-        // A tool is still minimized/docked. The user has left the "launched
-        // from the sidebar" context — drop the restore intent so that later
-        // FULLY closing the tool (e.g. dragging its chip to the trash) doesn't
-        // bounce the sidebar open. (The modal-dismissed listener that normally
-        // clears these gets blocked by modalManager's stopImmediatePropagation.)
+      if (anyDocked) {
+        // A tool has been swiped to a dock chip. The user has left the
+        // "launched from the sidebar" context — drop the restore intent so
+        // that later FULLY closing the tool (e.g. dragging its chip to the
+        // trash) doesn't bounce the sidebar open. (The modal-dismissed
+        // listener that normally clears these gets blocked by
+        // modalManager's stopImmediatePropagation.)
         _sidebarWasOpenBeforeTool = false;
         _railWasOpenBeforeTool = false;
+        return;
+      }
+      if (anyOpen) {
+        // Tool is still open (modal visible, not minimized) — preserve
+        // restore flags so the sidebar comes back when the tool closes.
         return;
       }
       if (_sidebarWasOpenBeforeTool && sb && sb.classList.contains('hidden')) {
@@ -459,7 +486,7 @@ export function initSidebarLayout(Storage, opts) {
       }
       _sidebarWasOpenBeforeTool = false;
       _railWasOpenBeforeTool = false;
-      if (_sidebarWasOpenBeforeTool || _railWasOpenBeforeTool) syncRailSide();
+      syncRailSide();
     };
     const _modalObs = new MutationObserver((muts) => {
       let triggered = false;

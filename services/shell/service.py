@@ -1,10 +1,28 @@
 # services/shell/service.py
 """Shell service — safe command execution."""
 
+import re
 from dataclasses import dataclass
 from typing import Optional, AsyncIterator
 import asyncio
 from pathlib import Path
+
+
+_DANGEROUS_PATTERNS: list[re.Pattern] = [
+    re.compile(r'\brm\s+-rf\s+/\b', re.IGNORECASE),
+    re.compile(r'\bmkfs\.', re.IGNORECASE),
+    re.compile(r'\bdd\s+if=', re.IGNORECASE),
+    re.compile(r'\b>:?\s*/dev/', re.IGNORECASE),
+    re.compile(r'\bchmod\s+777\s+/\s', re.IGNORECASE),
+    re.compile(r'\bwget\s+.+?\|?\s*sh\b', re.IGNORECASE),
+    re.compile(r'\bcurl\s+.+?\|?\s*(?:sh|bash|zsh)\b', re.IGNORECASE),
+    re.compile(r'\bmv\s+/\s', re.IGNORECASE),
+    re.compile(r'\bpoweroff\b|\breboot\b|\bshutdown\b', re.IGNORECASE),
+]
+
+_MAX_COMMAND_LENGTH = 10000
+
+_COMMAND_BLOCKLIST_MSG = "Command blocked by safety policy"
 
 
 @dataclass
@@ -14,6 +32,21 @@ class ShellResult:
     stderr: str
     exit_code: int
     timed_out: bool = False
+
+
+def _validate_command(command: str) -> str | None:
+    """Check a command string against safety rules. Returns error msg or None."""
+    if not command or not command.strip():
+        return "Empty command"
+    if len(command) > _MAX_COMMAND_LENGTH:
+        return f"Command exceeds max length ({_MAX_COMMAND_LENGTH} chars)"
+    stripped = command.strip().lstrip('\\').lstrip()
+    if stripped.startswith('#') or stripped.startswith('//'):
+        return "Comment-only command"
+    for pat in _DANGEROUS_PATTERNS:
+        if pat.search(command):
+            return _COMMAND_BLOCKLIST_MSG
+    return None
 
 
 class ShellService:
@@ -48,6 +81,10 @@ class ShellService:
         Returns:
             ShellResult with stdout, stderr, exit_code
         """
+        err = _validate_command(command)
+        if err:
+            return ShellResult(stdout="", stderr=err, exit_code=-1)
+
         timeout = timeout or self.timeout
         cwd = cwd or self.cwd
 
@@ -97,6 +134,11 @@ class ShellService:
             {"stream": "stdout"|"stderr", "data": line}
             {"exit_code": int}
         """
+        err = _validate_command(command)
+        if err:
+            yield {"stream": "stderr", "data": err}
+            yield {"exit_code": -1}
+            return
 
         proc = None
         reader_tasks = []

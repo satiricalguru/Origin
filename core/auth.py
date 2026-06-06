@@ -100,6 +100,13 @@ class AuthManager:
             with self._sessions_lock:
                 snapshot = dict(self._sessions)
             _atomic_write_json(self._sessions_path, snapshot)
+            try:
+                if os.name != "nt":
+                    mode = os.stat(self._sessions_path).st_mode
+                    if mode & 0o077:
+                        os.chmod(self._sessions_path, 0o600)
+            except OSError:
+                pass
         except Exception as e:
             logger.error(f"Failed to save sessions: {e}")
 
@@ -132,7 +139,27 @@ class AuthManager:
             self._save()
 
     def _save(self):
+        """Persist the config to disk atomically with owner-only perms.
+
+        `auth.json` contains bcrypt password hashes, TOTP secrets, and
+        plaintext backup codes for every user — leaking it lets an
+        attacker who has read access to `data/` either brute-force the
+        hashes or replay the 2FA backup codes without ever touching
+        the network. Default umask on most distros is 022, which would
+        leave the file world-readable. We force 0o600 on POSIX.
+        """
         _atomic_write_json(self.auth_path, self._config, indent=2)
+        try:
+            import stat
+            if os.name != "nt":
+                current = os.stat(self.auth_path).st_mode
+                if current & 0o077:
+                    os.chmod(self.auth_path, 0o600)
+        except OSError:
+            # Best-effort; don't crash startup if the FS doesn't support
+            # chmod (e.g. some FUSE mounts). The atomic_write itself is
+            # the more important invariant.
+            logger.debug("Could not tighten auth.json permissions", exc_info=False)
 
     @property
     def users(self) -> Dict[str, Any]:
@@ -241,7 +268,11 @@ class AuthManager:
         return True
 
     def is_admin(self, username: str) -> bool:
-        return self.users.get(username, {}).get("is_admin", False)
+        # Strict boolean check — `"is_admin": "False"` (string) is NOT admin.
+        # The simple `get("is_admin", False)` would let a malformed auth.json
+        # accidentally elevate a user.
+        v = self.users.get(username, {}).get("is_admin", False)
+        return bool(v) is True and isinstance(v, bool)
 
     def list_users(self) -> List[Dict[str, Any]]:
         return [
@@ -307,7 +338,7 @@ class AuthManager:
     def totp_get_provisioning_uri(self, username: str, secret: str) -> str:
         """Get the otpauth:// URI for QR code generation."""
         totp = pyotp.TOTP(secret)
-        return totp.provisioning_uri(name=username, issuer_name="Odysseus")
+        return totp.provisioning_uri(name=username, issuer_name="Origin")
 
     def totp_confirm_enable(self, username: str, code: str) -> bool:
         """Verify a TOTP code against the pending secret, then enable 2FA."""
@@ -317,7 +348,7 @@ class AuthManager:
         if not secret:
             return False
         totp = pyotp.TOTP(secret)
-        if not totp.verify(code, valid_window=1):
+        if not totp.verify(code, valid_window=0):
             return False
         # Enable 2FA
         self._config["users"][username]["totp_secret"] = secret
@@ -347,8 +378,12 @@ class AuthManager:
             self._save()
             logger.info(f"Backup code used for '{username}' ({len(backup)} remaining)")
             return True
+        # Only accept the current 30s window. A wider window is convenient
+        # for clock-skewed devices but lets an attacker who steals a code
+        # within ~90s of issuance reuse it 3 times. Login is also
+        # rate-limited (15/min per IP) so a tight window is fine here.
         totp = pyotp.TOTP(secret)
-        return totp.verify(code, valid_window=1)
+        return totp.verify(code, valid_window=0)
 
     def totp_disable(self, username: str, password: str) -> bool:
         """Disable 2FA for a user. Requires password confirmation."""

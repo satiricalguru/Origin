@@ -68,6 +68,9 @@ class TestMatchProviderCurated:
     def test_ollama_url(self):
         assert _match_provider_curated("https://ollama.com/api", "openai") == "ollama"
 
+    def test_nvidia_url(self):
+        assert _match_provider_curated("https://integrate.api.nvidia.com/v1", "openai") == "nvidia"
+
     def test_no_url_match_returns_provider(self):
         assert _match_provider_curated("https://localhost:1234", "openai") == "openai"
 
@@ -173,6 +176,30 @@ class TestIsChatModel:
 
     def test_legacy_openai_instruct_is_not_chat(self):
         assert _is_chat_model("gpt-3.5-turbo-instruct") is False
+
+
+# ── _is_free_model ──
+
+class TestIsFreeModel:
+    @pytest.mark.parametrize("model_id, base_url", [
+        ("some-local-model", "http://localhost:11434"),
+        ("google/gemini-2.5-flash:free", "https://openrouter.ai/api/v1"),
+        ("meta-llama/llama-3-8b-instruct:free", "https://openrouter.ai/api/v1"),
+        ("gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        ("gemini-3.5-pro", "https://generativelanguage.googleapis.com/v1beta/openai"),
+    ])
+    def test_free_models(self, model_id, base_url):
+        from routes.model_routes import _is_free_model
+        assert _is_free_model(model_id, base_url) is True
+
+    @pytest.mark.parametrize("model_id, base_url", [
+        ("google/gemini-2.5-flash", "https://openrouter.ai/api/v1"),
+        ("meta-llama/llama-3-8b-instruct", "https://openrouter.ai/api/v1"),
+        ("gpt-4o", "https://api.openai.com/v1"),
+    ])
+    def test_paid_models(self, model_id, base_url):
+        from routes.model_routes import _is_free_model
+        assert _is_free_model(model_id, base_url) is False
 
 
 # ── _classify_endpoint ──

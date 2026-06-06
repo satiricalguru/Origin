@@ -1,9 +1,9 @@
-# Odysseus
+# Origin
 ───────────────────────────────────────────────
- ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Odysseus vers. 1.0
+ ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Origin vers. 1.0
 ───────────────────────────────────────────────
 
-![Odysseus](docs/odysseus.jpg)
+![Origin](docs/odysseus.jpg)
 
 A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
 
@@ -14,6 +14,7 @@ A self-hosted AI workspace -- meant to be the self-hosted version of the UI expe
   - **Deep Research** -- multi-step runs that gather, read, and synthesize sources into a nice visual report.<br>　<sub>adapted from [Tongyi DeepResearch](https://github.com/Alibaba-NLP/DeepResearch)</sub>
   - **Compare** -- a fun tool to compare models side by side. Test completely blind, no bias!<br>　<sub>multi-model · blind test · synthesis</sub>
   - **Documents** -- YOU write the text, AI is there to assist, not the opposite.<br>　<sub>multi-tab editor · markdown · HTML · CSV · syntax highlighting · AI edits · suggestions</sub>
+  - **Workspace IDE** -- Full-featured integrated workspace editor powered by Monaco Editor.<br>　<sub>file explorer · outline · tabs · global search · Git timeline · terminal · Copilot panel</sub>
   - **Memory / Skills** -- Persistent memory and skills, your agent evolves over time as it better understands you and your tasks!<br>　<sub>ChromaDB · fastembed (ONNX) · vector + keyword retrieval · import/export</sub>
   - **Email** -- IMAP/SMTP inbox with AI triage built in: urgency reminders, auto-tag, auto-summary, auto-reply drafts, auto-spam.<br>　<sub>IMAP · SMTP · per-account routing · CalDAV-aware</sub>
   - **Notes & Tasks** -- Quick notes with reminders, a todo list, and scheduled tasks the agent can act on.<br>　<sub>note pings · checklist · cron-style tasks · ntfy / browser / email channels</sub>
@@ -51,8 +52,8 @@ pull request guidelines.
 
 ### Docker (recommended)
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/satiricalguru/Origin.git
+cd Origin
 cp .env.example .env       # optional, but recommended for explicit defaults
 docker compose up -d --build
 ```
@@ -61,8 +62,8 @@ taken, set `APP_PORT=7001` in `.env` and recreate the container.
 
 ### Native Linux / macOS
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/satiricalguru/Origin.git
+cd Origin
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -74,11 +75,11 @@ downloads and serves.
 
 ### Apple Silicon
 Docker on macOS cannot use the Metal GPU. For GPU-accelerated Cookbook on an
-M-series Mac, run Odysseus natively:
+M-series Mac, run Origin natively:
 
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/satiricalguru/Origin.git
+cd Origin
 ./start-macos.sh
 ```
 
@@ -91,7 +92,7 @@ It launches at `http://127.0.0.1:7860`. To build a clickable app wrapper:
 <details>
 <summary>Cookbook, GPU, Ollama, and troubleshooting notes</summary>
 
-**Docker bundled services.** Compose starts Odysseus, ChromaDB, SearXNG, and
+**Docker bundled services.** Compose starts Origin, ChromaDB, SearXNG, and
 ntfy. ChromaDB/SearXNG/ntfy bind host ports to `127.0.0.1` by default, so they
 are reachable from the host but not exposed to your LAN/public internet unless
 you opt in.
@@ -102,7 +103,7 @@ serve engines live in `./data/local` (`~/.local` in the container), so they
 survive container recreation.
 
 **Remote servers.** In **Cookbook -> Settings -> Servers**, generate the
-Odysseus SSH key and add the public key to the remote server's
+Origin SSH key and add the public key to the remote server's
 `~/.ssh/authorized_keys`. From the host you can also run:
 
 ```bash
@@ -120,8 +121,8 @@ COMPOSE_FILE=docker-compose.yml:docker/gpu.amd.yml
 Verify with:
 
 ```bash
-docker compose exec odysseus nvidia-smi -L
-docker compose exec odysseus rocm-smi
+docker compose exec origin nvidia-smi -L
+docker compose exec origin rocm-smi
 ```
 
 **Ollama with Docker.** If Ollama runs on the host, add this endpoint in
@@ -141,14 +142,14 @@ OLLAMA_HOST=0.0.0.0:11434 ollama serve
 
 ```bash
 docker compose ps
-docker compose logs --tail=120 odysseus
-docker compose logs odysseus | grep -E 'ChromaDB|MemoryVectorStore|DEGRADED'
+docker compose logs --tail=120 origin
+docker compose logs origin | grep -E 'ChromaDB|MemoryVectorStore|DEGRADED'
 ```
 
 **macOS details.** `start-macos.sh` installs Homebrew deps, creates the venv,
 runs setup, and starts uvicorn on port `7860` because AirPlay often holds
 `7000`. It uses llama.cpp/Ollama for Metal. vLLM/SGLang are CUDA/ROCm-only and
-do not run on macOS. MLX-only models are not served by Odysseus.
+do not run on macOS. MLX-only models are not served by Origin.
 
 </details>
 
@@ -158,16 +159,16 @@ do not run on macOS. MLX-only models are not served by Odysseus.
 server; safe to re-run):
 
 ```powershell
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/satiricalguru/Origin.git
+cd Origin
 powershell -ExecutionPolicy Bypass -File .\launch-windows.ps1
 ```
 
 Or do it by hand:
 
 ```powershell
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
-cd odysseus
+git clone https://github.com/satiricalguru/Origin.git
+cd Origin
 python -m venv venv
 venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -180,14 +181,14 @@ email, calendar, deep research) runs fully native. For full **Cookbook** backgro
 model downloads and the agent shell tool, also install
 [Git for Windows](https://git-scm.com/download/win) (provides `bash.exe`).
 Local GPU *serving* of vLLM/SGLang needs Linux/WSL2; for a local model on Windows,
-[Ollama](https://ollama.com/download) is the easiest path — point Odysseus at
+[Ollama](https://ollama.com/download) is the easiest path — point Origin at
 `http://localhost:11434/v1` in Settings.
 
 Open `http://localhost:7000`, log in with the generated admin password,
 and configure everything else inside **Settings**.
 
 ## Security Notes
-Odysseus is a self-hosted workspace with powerful local tools: shell access, file uploads, model downloads, web research, email/calendar integrations, and API tokens. Treat it like an admin console.
+Origin is a self-hosted workspace with powerful local tools: shell access, file uploads, model downloads, web research, email/calendar integrations, and API tokens. Treat it like an admin console.
 
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Do not expose it directly to the public internet without HTTPS and a trusted reverse proxy.
@@ -200,12 +201,12 @@ Odysseus is a self-hosted workspace with powerful local tools: shell access, fil
 - Before publishing a fork, run `git status --short` and confirm no private files from `.env`, `data/`, `logs/`, uploads, backups, or local databases are staged.
 
 ### Putting it behind HTTPS
-Odysseus serves plain HTTP on its port. That's fine for `localhost` and trusted LAN/VPN use, but browsers will warn ("Password fields present on an insecure page") and the login + API tokens travel in cleartext. For anything reachable outside your machine — including a Tailscale IP shared with other devices — put a TLS-terminating reverse proxy in front.
+Origin serves plain HTTP on its port. That's fine for `localhost` and trusted LAN/VPN use, but browsers will warn ("Password fields present on an insecure page") and the login + API tokens travel in cleartext. For anything reachable outside your machine — including a Tailscale IP shared with other devices — put a TLS-terminating reverse proxy in front.
 
 Shortest path with [Caddy](https://caddyserver.com/) (auto-renews Let's Encrypt certs):
 
 ```caddy
-odysseus.example.com {
+origin.example.com {
   reverse_proxy localhost:7000
 }
 ```
@@ -235,10 +236,12 @@ Key settings:
 | `CHROMADB_HOST` | `localhost` | ChromaDB host for vector memory. Docker overrides this to `chromadb`. |
 | `CHROMADB_PORT` | `8100` | ChromaDB port for manual host runs. Docker overrides this to `8000`. |
 | `EMBEDDING_URL` | -- | OpenAI-compatible embeddings endpoint |
+| `ORIGIN_INPROCESS_POLLERS` | `1` | Enable/disable in-process email pollers (set to `0` to run via cron) |
+| `ORIGIN_INPROCESS_TASKS` | `1` | Enable/disable in-process scheduled task runner (set to `0` to run via cron) |
 
 ### Built-in MCP servers (optional setup)
 
-Odysseus auto-registers a few built-in MCP servers at startup. The npx-based ones (currently the browser server, `@playwright/mcp`) only start when their npm package is already in the local npx cache. If a package isn't cached, that server is skipped with a startup log message explaining what to do, so a fresh install does not block on a multi-minute npm download or hang if Playwright system deps are missing.
+Origin auto-registers a few built-in MCP servers at startup. The npx-based ones (currently the browser server, `@playwright/mcp`) only start when their npm package is already in the local npx cache. If a package isn't cached, that server is skipped with a startup log message explaining what to do, so a fresh install does not block on a multi-minute npm download or hang if Playwright system deps are missing.
 
 To enable the browser MCP (page navigation, screenshots, vision), run once:
 
@@ -246,7 +249,7 @@ To enable the browser MCP (page navigation, screenshots, vision), run once:
 npx -y @playwright/mcp@latest --version
 ```
 
-That installs `@playwright/mcp` plus Playwright (~300MB total). Restart Odysseus and the server will register at startup.
+That installs `@playwright/mcp` plus Playwright (~300MB total). Restart Origin and the server will register at startup.
 
 ## Architecture
 ```
@@ -261,32 +264,18 @@ docs/      landing page (index.html) + preview clips
 
 ## Data
 All user data lives in `data/` (gitignored): `app.db` (sessions, messages, documents),
-`memory.json`, `presets.json`, `uploads/`, `personal_docs/`, `chroma/`, `settings.json`.
+`memory.json`, `presets.json`, `uploads/`, `personal_docs/`, `chroma/`, `settings.json`, `ide_workspace.json`.
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=pewdiepie-archdaemon%2Fodysseus&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=satiricalguru%2FOrigin&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=pewdiepie-archdaemon/odysseus&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=pewdiepie-archdaemon/odysseus&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=pewdiepie-archdaemon/odysseus&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=satiricalguru/Origin&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=satiricalguru/Origin&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=satiricalguru/Origin&type=date&legend=top-left" />
  </picture>
 </a>
 
 ## License
 MIT -- see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
-```
-                                  |
-                                 |||
-                                |||||
-                  |    |    |   |||||||
-                 )_)  )_)  )_)   ~|~
-                )___))___))___)\  |
-               )____)____)_____)\\|
-             _____|____|____|_____\\\__
-             \                       /
-       ~^~^~~^~^~~^~^~~^~^~~^~^~~^~^~~^~^~~^~^~
-               ~^~  all aboard!  ~^~
-       ~^~^~~^~^~~^~^~~^~^~~^~^~~^~^~~^~^~~^~^~
-```

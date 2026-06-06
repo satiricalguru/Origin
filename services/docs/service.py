@@ -2,7 +2,7 @@
 """Docs service — personal document RAG."""
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from src.rag_manager import RAGManager
 
@@ -13,7 +13,7 @@ class DocChunk:
     text: str
     source: str
     score: float
-    metadata: Dict[str, Any] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -49,15 +49,39 @@ class DocsService:
             List of DocChunk objects
         """
         results = self.rag.search(query, k=top_k)
-        return [
-            DocChunk(
-                text=r.get("text", r.get("content", "")),
-                source=r.get("source", r.get("metadata", {}).get("source", "unknown")),
-                score=r.get("score", 0.0),
-                metadata=r.get("metadata"),
+        chunks: List[DocChunk] = []
+        for r in results:
+            text_val = r.get("text") or r.get("content")
+            text = str(text_val) if text_val is not None else ""
+
+            meta_val = r.get("metadata")
+            metadata = meta_val if isinstance(meta_val, dict) else None
+
+            source_val = r.get("source")
+            if source_val is not None:
+                source = str(source_val)
+            else:
+                source = "unknown"
+                if metadata:
+                    src_in_meta = metadata.get("source")
+                    if src_in_meta is not None:
+                        source = str(src_in_meta)
+
+            score_val = r.get("score")
+            try:
+                score = float(score_val) if score_val is not None else 0.0
+            except (ValueError, TypeError):
+                score = 0.0
+
+            chunks.append(
+                DocChunk(
+                    text=text,
+                    source=source,
+                    score=score,
+                    metadata=metadata,
+                )
             )
-            for r in results
-        ]
+        return chunks
 
     async def index(self, directory: str) -> IndexResult:
         """

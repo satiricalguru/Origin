@@ -27,7 +27,18 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app code
-COPY . .
+COPY app.py pyproject.toml setup.py ./
+COPY core/ core/
+COPY routes/ routes/
+COPY services/ services/
+COPY static/ static/
+COPY scripts/ scripts/
+COPY config/ config/
+COPY src/ src/
+COPY tests/ tests/
+COPY docs/ docs/
+COPY licenses/ licenses/
+COPY requirements*.txt ./
 
 # Create data directory (mount a volume here for persistence)
 RUN mkdir -p data logs

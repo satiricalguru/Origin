@@ -7,7 +7,8 @@ scheduler without needing an LLM call.
 
 import logging
 import os
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
 from typing import Tuple
 
 from src.auth_helpers import owner_filter
@@ -42,7 +43,6 @@ async def action_tidy_sessions(owner: str, **kwargs) -> Tuple[str, bool]:
     the LLM folder-sort phase is skipped (user opted to keep this task
     LLM-free; sorting can be triggered manually via the Chats UI)."""
     try:
-        import asyncio
         from src.session_actions import run_auto_sort
         result = await asyncio.wait_for(run_auto_sort(owner, skip_llm=True), timeout=60)
         return result, True
@@ -246,12 +246,12 @@ async def action_consolidate_memory(owner: str, **kwargs) -> Tuple[str, bool]:
 async def _run_subprocess(argv, *, shell: bool = False, timeout: int = 120, label: str = "Command") -> Tuple[str, bool]:
     """Shared subprocess runner. Wraps the blocking subprocess.run in
     asyncio.to_thread so the event loop stays responsive."""
-    import asyncio
     import subprocess
     try:
         result = await asyncio.to_thread(
             subprocess.run, argv, shell=shell, capture_output=True, text=True, timeout=timeout,
         )
+        assert isinstance(result, subprocess.CompletedProcess)
         output = (result.stdout or "").strip()
         if result.returncode != 0 and result.stderr:
             output += "\nSTDERR: " + result.stderr.strip()
@@ -282,7 +282,7 @@ async def action_run_script(owner: str, script: str = "", host: str = "", **kwar
     """Run a script locally, or via SSH when a host is configured."""
     if not script:
         return "No script specified", False
-    target_host = (host or os.getenv("ODYSSEUS_SCRIPT_HOST", "localhost")).strip()
+    target_host = (host or os.getenv("ORIGIN_SCRIPT_HOST", "localhost")).strip()
     if target_host in ("", "localhost", "127.0.0.1", "local"):
         if IS_WINDOWS and find_bash():
             return await _run_subprocess([find_bash(), "-c", script], timeout=300, label="Script")
@@ -408,7 +408,7 @@ async def action_tidy_calendar(owner: str, **kwargs) -> Tuple[str, bool]:
                 if newest is not None:
                     STATE_FILE.write_text(json.dumps({
                         "last_created_at": newest.isoformat(),
-                        "last_run_at": datetime.utcnow().isoformat(),
+                        "last_run_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                         "scanned": len(events),
                         "removed": len(removed),
                     }, indent=2))
@@ -538,7 +538,7 @@ async def action_classify_events(owner: str, **kwargs) -> Tuple[str, bool]:
 
         db = SessionLocal()
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             horizon = now + timedelta(days=30)
             events = db.query(CalendarEvent).filter(
                 CalendarEvent.dtstart >= now,
@@ -581,17 +581,17 @@ async def action_classify_events(owner: str, **kwargs) -> Tuple[str, bool]:
                 if ev.event_type and ev.importance and ev.importance != "normal":
                     unchanged += 1
                     continue
-                etype, importance = _classify_event_heuristic(ev.summary or "")
+                etype, importance = _classify_event_heuristic(str(ev.summary or ""))
                 if etype and importance:
                     ev.event_type = etype
-                    ev.color = _TYPE_COLORS.get(etype)
+                    ev.color = _TYPE_COLORS.get(etype)  # type: ignore
                     ev.importance = importance
                     classified_h += 1
                     continue
                 # Apply partial heuristic; queue for LLM to fill missing
                 if etype:
                     ev.event_type = etype
-                    ev.color = _TYPE_COLORS.get(etype)
+                    ev.color = _TYPE_COLORS.get(etype)  # type: ignore
                 if llm_available:
                     llm_queue.append(ev)
                 elif etype:
@@ -632,6 +632,7 @@ async def action_classify_events(owner: str, **kwargs) -> Tuple[str, bool]:
                     f"EVENTS: {_json.dumps(items)}"
                 )
                 try:
+                    assert llm_url is not None and llm_model is not None
                     raw = await llm_call_async(
                         url=llm_url, model=llm_model,
                         messages=[{"role": "user", "content": prompt}],
@@ -731,7 +732,7 @@ async def action_mark_email_boundaries(owner: str, **kwargs) -> Tuple[str, bool]
         import re as _re
         import email as _email_mod
         import asyncio as _aio
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timezone as _tz
         from routes.email_helpers import _imap_connect, _decode_header, SCHEDULED_DB
         from src.endpoint_resolver import resolve_endpoint
         from src.llm_core import llm_call_async
@@ -896,7 +897,7 @@ async def action_mark_email_boundaries(owner: str, **kwargs) -> Tuple[str, bool]
                     "INSERT OR REPLACE INTO email_boundaries "
                     "(message_id, uid, folder, sig_start, quote_start, model_used, created_at, turns_json) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (mid, str(uid), "INBOX", sig, quote, model, _dt.utcnow().isoformat(), turns_json),
+                    (mid, str(uid), "INBOX", sig, quote, model, _dt.now(_tz.utc).replace(tzinfo=None).isoformat(), turns_json),
                 )
                 c.commit()
                 c.close()
@@ -925,7 +926,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
         import re as _re
         import email as _email_mod
         import asyncio as _aio
-        from datetime import datetime as _dt, timedelta as _td
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
         from routes.email_helpers import _imap_connect, SCHEDULED_DB
         from src.endpoint_resolver import resolve_endpoint
         from src.llm_core import llm_call_async
@@ -952,7 +953,8 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                             continue
                         msg = _email_mod.message_from_bytes(raw)
                         from_raw = msg.get("From", "")
-                        from_addr = _email_mod.utils.parseaddr(from_raw)[1].lower().strip()
+                        import email.utils as _email_utils
+                        from_addr = _email_utils.parseaddr(from_raw)[1].lower().strip()
                         if not from_addr or "@" not in from_addr:
                             continue
                         results.append({
@@ -999,7 +1001,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
         except Exception:
             cached = {}
 
-        cutoff_iso = (_dt.utcnow() - _td(days=30)).isoformat()
+        cutoff_iso = (_dt.now(_tz.utc).replace(tzinfo=None) - _td(days=30)).isoformat()
         eligible: list[tuple[str, list[dict]]] = []
         for addr, msgs in by_sender.items():
             if len(msgs) < 3:
@@ -1104,7 +1106,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                     "INSERT OR REPLACE INTO sender_signatures "
                     "(from_address, signature_text, sample_count, last_built_at, model_used, source) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (addr, cached_sig, len(bodies), _dt.utcnow().isoformat(), model, "llm"),
+                    (addr, cached_sig, len(bodies), _dt.now(_tz.utc).replace(tzinfo=None).isoformat(), model, "llm"),
                 )
                 conn.commit()
                 conn.close()
@@ -1208,7 +1210,7 @@ async def action_daily_brief(owner: str, **kwargs) -> Tuple[str, bool]:
                 except Exception:
                     continue
             elif n.pinned and n.title:
-                todo_lines.append(n.title)
+                todo_lines.append(str(n.title))
 
         # ----- Compose -----
         # %-d is GNU-only; format the day with str() so the brief works on
@@ -1438,7 +1440,6 @@ async def action_ping_notes(owner: str, **kwargs) -> Tuple[str, bool]:
     """
     try:
         import json as _json
-        import time as _time
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         from pathlib import Path as _P
         from core.database import SessionLocal as _SL, Note as _N
@@ -1502,15 +1503,16 @@ async def action_ping_notes(owner: str, **kwargs) -> Tuple[str, bool]:
             sent = []
 
             for n in notes:
-                seen_ids.add(n.id)
-                due = _parse_due(n.due_date)
+                note_id_str = str(n.id)
+                seen_ids.add(note_id_str)
+                due = _parse_due(str(n.due_date))
                 if not due:
                     continue
                 # Inside the ±5min window?
                 if abs((due - now).total_seconds()) > window.total_seconds():
                     continue
                 # Recently pinged? Skip.
-                last = cache.get(n.id)
+                last = cache.get(note_id_str)
                 if last:
                     try:
                         if isinstance(last, dict):
@@ -1530,7 +1532,7 @@ async def action_ping_notes(owner: str, **kwargs) -> Tuple[str, bool]:
                 # Items: list pending checklist entries inline.
                 if n.items:
                     try:
-                        items = _json.loads(n.items)
+                        items = _json.loads(str(n.items))
                         pending = [
                             it.get("text", "")
                             for it in items
@@ -1544,13 +1546,13 @@ async def action_ping_notes(owner: str, **kwargs) -> Tuple[str, bool]:
                 try:
                     from routes.note_routes import dispatch_reminder
                     await dispatch_reminder(
-                        title=title, note_body=body, note_id=n.id,
-                        owner=n.owner or owner or "",
+                        title=title, note_body=body, note_id=note_id_str,
+                        owner=str(n.owner or owner or ""),
                     )
-                    cache[n.id] = now.isoformat()
+                    cache[note_id_str] = now.isoformat()
                     sent.append(title)
                 except Exception as e:
-                    logger.warning(f"ping_notes: dispatch failed for {n.id}: {e}")
+                    logger.warning(f"ping_notes: dispatch failed for {note_id_str}: {e}")
 
             # Prune cache entries for notes that no longer exist.
             for stale in [k for k in cache if k not in seen_ids]:
@@ -1594,11 +1596,9 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         import json as _json
         import email as _email_mod
         import asyncio as _aio
-        import os as _os
         import re as _re
         import time as _time
-        import httpx
-        from datetime import datetime as _dt, timedelta as _td
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
         from pathlib import Path as _P
         from core.database import SessionLocal as _SL, EmailAccount as _EA
         from routes.email_helpers import _imap_connect, _decode_header
@@ -1613,7 +1613,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         CACHE_DIR = _P("data/email_urgency_cache")
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        AGE_CUTOFF = _dt.utcnow() - _td(days=7)
+        AGE_CUTOFF = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=7)
         TRIAGE_VERSION = 3
         CATEGORY_TAGS = {
             "newsletter", "marketing", "notification", "finance", "bills",
@@ -1669,7 +1669,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             def _scan_one(account=acc, cache_uids=cache.get("uids", {})):
                 """Sync IMAP work runs in a thread."""
                 results = []
-                conn = _imap_connect(account.id)
+                conn = _imap_connect(str(account.id))
                 try:
                     conn.select("INBOX", readonly=True)
                     # IMAP date is the only practical pre-filter — UNSEEN AND
@@ -1681,7 +1681,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     uids = data[0].split()
                     for uid_b in uids:
                         uid = uid_b.decode() if isinstance(uid_b, bytes) else str(uid_b)
-                        key = f"{account.id}:{uid}"
+                        key = f"{str(account.id)}:{uid}"
                         cached = cache_uids.get(uid)
                         cached_ok = isinstance(cached, dict) and cached.get("triage_version") == TRIAGE_VERSION
                         results.append({"key": key, "uid": uid, "cached": cached if cached_ok else None})
@@ -1697,17 +1697,17 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                             # response — concatenate the bytes for parsing.
                             raw = b""
                             for part in msg_data:
-                                if isinstance(part, tuple) and part[1]:
+                                if isinstance(part, tuple) and isinstance(part[1], bytes):
                                     raw += part[1] + b"\n\n"
                             if not raw:
                                 continue
                             msg = _email_mod.message_from_bytes(raw)
-                            # Skip Odysseus-generated reminders so the scanner
+                            # Skip Origin-generated reminders so the scanner
                             # doesn't classify its own emails as urgent and
                             # trigger a feedback loop. Match on either the
                             # stamped headers OR the subject prefix.
-                            _ody_origin = (msg.get("X-Odysseus-Origin") or "").strip().lower()
-                            _ody_kind = (msg.get("X-Odysseus-Kind") or "").strip().lower()
+                            _ody_origin = (msg.get("X-Origin-Origin") or "").strip().lower()
+                            _ody_kind = (msg.get("X-Origin-Kind") or "").strip().lower()
                             _raw_subj = (msg.get("Subject") or "").lower()
                             # MCP path drops custom headers (email_server's
                             # schema doesn't accept them), so we ALSO match the
@@ -1715,8 +1715,8 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                             # always stamps. Anything that looks self-generated
                             # is dropped before classification to prevent the
                             # scanner from labelling its own emails "urgent".
-                            if (_ody_origin == "odysseus-ui" or _ody_kind == "reminder"
-                                    or _raw_subj.startswith("reminder (odysseus):")
+                            if (_ody_origin == "origin-ui" or _ody_kind == "reminder"
+                                    or _raw_subj.startswith("reminder (origin):")
                                     or _raw_subj.startswith("reminder:")
                                     or _raw_subj.startswith("[task]")):
                                 # Drop this candidate entirely — don't list it
@@ -1740,10 +1740,14 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                                 if msg.is_multipart():
                                     for part in msg.walk():
                                         if part.get_content_type() == "text/plain":
-                                            body_snippet = part.get_payload(decode=True).decode("utf-8", errors="ignore")[:1600]
+                                            payload = part.get_payload(decode=True)
+                                            if isinstance(payload, bytes):
+                                                body_snippet = payload.decode("utf-8", errors="ignore")[:1600]
                                             break
                                 else:
-                                    body_snippet = (msg.get_payload(decode=True) or b"").decode("utf-8", errors="ignore")[:1600]
+                                    payload = msg.get_payload(decode=True)
+                                    if isinstance(payload, bytes):
+                                        body_snippet = payload.decode("utf-8", errors="ignore")[:1600]
                             except Exception:
                                 body_snippet = ""
                             results[-1].update({
@@ -1914,7 +1918,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         try:
             import sqlite3 as _sql3
             from routes.email_helpers import SCHEDULED_DB, _init_scheduled_db
-            from datetime import datetime as _dt2
+            from datetime import datetime as _dt2, timezone as _tz2
             _init_scheduled_db()
             _conn = _sql3.connect(SCHEDULED_DB)
             try:
@@ -1974,7 +1978,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                             "VALUES (?, ?, ?, 'INBOX', ?, ?, ?, ?, ?, ?)",
                             (_msg_id, _owner_key, _uid_only, _v.get("subject", ""),
                              _v.get("from", ""), _json.dumps(_new_tags), _spam, _v.get("reason", ""),
-                             _dt2.utcnow().isoformat()),
+                             _dt2.now(_tz2.utc).replace(tzinfo=None).isoformat()),
                         )
                 _conn.commit()
             finally:
@@ -2004,7 +2008,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             # one — so the reminder email tells you which messages to act on,
             # not just "4 needing reply". Optional deep-link when the user has
             # `app_public_url` configured in Settings (so the email row links
-            # straight into the Odysseus Email tab).
+            # straight into the Origin Email tab).
             # Sort: highest-scored UIDs first; cap at 10 to keep the email tidy.
             sorted_urgent = sorted(
                 ((k, per_uid_scores[k]) for k in urgent_keys),
@@ -2182,7 +2186,7 @@ BUILTIN_ACTION_INFO = {
     "mark_email_boundaries": "LLM-detect signature & quoted-reply offsets in new emails; cached so future renders fold without further LLM calls",
     "learn_sender_signatures": "LLM learns each sender's signature from 3+ of their recent emails; cached per address so future renders fold sigs reliably without heuristics",
     "ssh_command": "Run a shell command on a local or remote host",
-    "run_script": "Run a script locally or on ODYSSEUS_SCRIPT_HOST",
+    "run_script": "Run a script locally or on ORIGIN_SCRIPT_HOST",
     "test_skills": "Run the per-skill Test on every skill: agent run + LLM judge → records verdict on the skill (pass/needs_work/fail/inconclusive). Advisory only — never rewrites or demotes anything.",
     "audit_skills": "Audit unaudited skills after enough new skills are added: test, narrow metadata, self-edit/retry, optional teacher rewrite, tag duplicates/trivial skills, and publish/draft using the auto-approve threshold.",
     "check_email_urgency": "Scan unread emails hourly, tag urgent/reply-soon/newsletter/marketing/spam, and send a reminder when a new email needs a fast reply.",

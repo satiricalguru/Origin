@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""odysseus-docs — shell wrapper for the living-document store.
+"""origin-docs — shell wrapper for the living-document store.
 
 Documents are the AI-editable text/markdown/code files the assistant
 creates in-place (think: a scratchpad it can revise). Each document
 has a content blob + version history.
 
-    odysseus-docs list [--active] [--limit N]
-    odysseus-docs show DOC_ID                # current content + metadata
-    odysseus-docs versions DOC_ID            # version history (no content)
-    odysseus-docs export DOC_ID --version N  # full content of a specific version
-    odysseus-docs search "invoice"           # title + current_content match
-    odysseus-docs delete DOC_ID              # soft-delete (is_active=False)
+    origin-docs list [--active] [--limit N]
+    origin-docs show DOC_ID                # current content + metadata
+    origin-docs versions DOC_ID            # version history (no content)
+    origin-docs export DOC_ID --version N  # full content of a specific version
+    origin-docs search "invoice"           # title + current_content match
+    origin-docs delete DOC_ID              # soft-delete (is_active=False)
 
 Reads `data/app.db` directly.
 """
@@ -160,7 +160,7 @@ def cmd_delete(args):
 def _build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--pretty", action="store_true")
-    p = argparse.ArgumentParser(prog="odysseus-docs", parents=[common])
+    p = argparse.ArgumentParser(prog="origin-docs", parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pl = sub.add_parser("list", parents=[common])

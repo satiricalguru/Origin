@@ -1,3 +1,13 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]
+
+[tool.pyright]
+include = ["app.py", "core", "routes", "services", "src"]
+exclude = ["**/node_modules", "**/__pycache__", "venv", ".pytest_cache"]
+venvPath = "."
+venv = "venv"
+extraPaths = ["."]

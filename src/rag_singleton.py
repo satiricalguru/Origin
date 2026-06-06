@@ -4,6 +4,7 @@ RAG singleton instance for the application.
 import os
 import logging
 import time
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 rag_instance = None
 _last_attempt = 0.0
 _RETRY_INTERVAL = 30  # seconds between re-init attempts
+_rag_lock = threading.Lock()
 
 
 def get_rag_manager():
@@ -29,14 +31,15 @@ def get_rag_manager():
     """
     global rag_instance, _last_attempt
 
-    if rag_instance is not None:
-        return rag_instance
+    with _rag_lock:
+        if rag_instance is not None:
+            return rag_instance
 
-    now = time.monotonic()
-    if now - _last_attempt < _RETRY_INTERVAL:
-        return None  # too soon to retry — last attempt failed
+        now = time.monotonic()
+        if now - _last_attempt < _RETRY_INTERVAL:
+            return None
 
-    _last_attempt = now
+        _last_attempt = now
 
     try:
         from src.rag_vector import VectorRAG

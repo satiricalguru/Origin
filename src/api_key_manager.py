@@ -2,6 +2,7 @@ import os
 import json
 from typing import Dict
 from cryptography.fernet import Fernet
+from core.platform_compat import safe_chmod
 
 class APIKeyManager:
     def __init__(self, data_dir: str):
@@ -18,6 +19,7 @@ class APIKeyManager:
             key = Fernet.generate_key()
             with open(self.key_file, 'wb') as f:
                 f.write(key)
+            safe_chmod(self.key_file, 0o600)
             return key
     
     def encrypt_api_key(self, api_key: str) -> str:

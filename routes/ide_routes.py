@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,6 @@ ACTIVE_WORKSPACE = _load_saved_workspace()
 
 def get_active_workspace_path() -> Path:
     """Retrieve the dynamically set active workspace path."""
-    global ACTIVE_WORKSPACE
     return ACTIVE_WORKSPACE
 
 def secure_path(requested_path: str) -> Path:

@@ -9,6 +9,7 @@ import mimetypes
 import threading
 from datetime import datetime, timedelta
 from typing import Dict, Any
+import logging
 from fastapi import HTTPException, UploadFile
 def secure_filename(filename: str) -> str:
     """Sanitize a filename (replaces werkzeug.utils.secure_filename)."""
@@ -25,8 +26,6 @@ def secure_filename(filename: str) -> str:
     # Don't allow dotfiles
     filename = filename.lstrip(".")
     return filename or "unnamed"
-import logging
-
 logger = logging.getLogger(__name__)
 
 class UploadHandler:
@@ -166,21 +165,28 @@ class UploadHandler:
             'application/x-executable', 'application/x-sharedlib',
             'application/x-dll', 'application/x-msdownload',
             'application/x-sh', 'application/x-bat', 'application/x-vbs',
-            'application/javascript', 'application/x-javascript'
+            'application/javascript', 'application/x-javascript',
+            'text/html', 'image/svg+xml',
         }
-        
+
+        # Keep in sync with src.config.SecurityConfig.dangerous_extensions.
+        # The runtime check here is the actual gate; the config default is
+        # the documented fallback. Both lists must include the same set or
+        # an `.sh`/`.py`/`.js` upload can slip past one and be served by
+        # the static handler.
         dangerous_extensions = {
-            '.exe', '.dll', '.bat', '.cmd', '.vbs', 
-            '.ps1', '.jsp', '.asp', '.aspx'
+            '.exe', '.dll', '.bat', '.cmd', '.sh', '.bash',
+            '.js', '.vbs', '.ps1', '.py', '.php', '.jsp', '.asp', '.aspx',
+            '.html', '.htm', '.svg', '.hta', '.scr', '.msi',
         }
-        
+
         if content_type in dangerous_types:
             return False
-        
+
         _, ext = os.path.splitext(filename.lower())
         if ext in dangerous_extensions:
             return False
-        
+
         return True
     
     def cleanup_old_uploads(self):

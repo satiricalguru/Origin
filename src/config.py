@@ -190,18 +190,13 @@ def create_directories():
 # Validate configuration on startup
 def validate_config():
     """Validate the application configuration."""
-    # Check if LLM host is reachable if specified
-    if config.llm.default_host and config.llm.default_host.startswith("192.168."):
-        # This is a local IP, assume it's valid
-        pass
-    
-    # Check if API keys are set when needed
-    if not config.llm.openai_api_key:
-        # OpenAI API key not set, that's OK if not using OpenAI
-        pass
-    
-    # Create directories
-    create_directories()
+    # Create the data directories. Any failure here would block startup, so
+    # we wrap in a try/except and log rather than crash the import.
+    try:
+        create_directories()
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("validate_config: dir creation failed: %s", e)
 
 # Initialize configuration
 validate_config()

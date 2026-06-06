@@ -57,15 +57,36 @@ class CreateUserRequest(BaseModel):
     is_admin: bool = False
 
 
-class DeleteUserRequest(BaseModel):
-    username: str
-
-
 class RenameUserRequest(BaseModel):
     username: str
 
 
-SESSION_COOKIE = "odysseus_session"
+SESSION_COOKIE = "origin_session"
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_cookie_secure(request: Request) -> bool:
+    """Decide whether session cookies should set the Secure flag.
+
+    Resolution order:
+      1. Explicit ``SECURE_COOKIES`` env var (``true``/``false``) always wins.
+      2. If unset, default to ``False`` for loopback connections (no TLS to
+         negotiate) and ``True`` everywhere else — a stricter opt-out than
+         the previous ``"false"`` default, which silently leaked the session
+         cookie over plaintext LAN/HTTP. Set ``SECURE_COOKIES=false`` in
+         the env to restore the legacy behaviour.
+    """
+    explicit = os.getenv("SECURE_COOKIES")
+    if explicit is not None:
+        return explicit.strip().lower() == "true"
+    host = ""
+    if request.client and request.client.host:
+        host = request.client.host.lower()
+    if not host or host in _LOOPBACK_HOSTS:
+        return False
+    return True
 
 
 def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
@@ -135,7 +156,12 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             value=token,
             httponly=True,
             samesite="lax",
-            secure=os.getenv("SECURE_COOKIES", "false").lower() == "true",
+            # Cookie `secure` default: explicit env var wins. If unset,
+            # default to `false` for loopback (no scheme to be secure
+            # over plain HTTP) and `true` everywhere else — better to
+            # have an opt-out for HTTPS deployments than silently
+            # transmit the session cookie in cleartext on a LAN deploy.
+            secure=_is_cookie_secure(request),
             path="/",
         )
         if body.remember:
@@ -200,7 +226,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         import qrcode, io, base64
         qr = qrcode.make(uri, box_size=6, border=2)
         buf = io.BytesIO()
-        qr.save(buf, format="PNG")
+        qr.save(buf, format="PNG")  # type: ignore
         qr_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return {"secret": secret, "uri": uri, "qr_code": f"data:image/png;base64,{qr_b64}"}
 
@@ -337,12 +363,12 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         auth_manager.signup_enabled = not auth_manager.signup_enabled
         return {"ok": True, "signup_enabled": auth_manager.signup_enabled}
 
-    @router.delete("/users")
-    async def admin_delete_user(body: DeleteUserRequest, request: Request):
+    @router.delete("/users/{username}")
+    async def admin_delete_user(username: str, request: Request):
         user = _get_current_user(request)
         if not user or not auth_manager.is_admin(user):
             raise HTTPException(403, "Admin only")
-        ok = auth_manager.delete_user(body.username, user)
+        ok = auth_manager.delete_user(username, user)
         if not ok:
             raise HTTPException(400, "Cannot delete user")
         return {"ok": True}
@@ -499,9 +525,9 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             import httpx
             from urllib.parse import urlparse
             # Strip any path/query the user accidentally pasted in the
-            # base URL (e.g. `http://host:8091/odysseus`) — otherwise
+            # base URL (e.g. `http://host:8091/origin`) — otherwise
             # the topic gets appended after the path and we publish to
-            # `/odysseus/odysseus` (which ntfy 404s on). ntfy itself
+            # `/origin/origin` (which ntfy 404s on). ntfy itself
             # only ever serves from the root.
             raw_base = (integ.get("base_url") or "").strip()
             parsed = urlparse(raw_base)
@@ -512,7 +538,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             api_key = integ.get("api_key", "")
             auth_type = (integ.get("auth_type") or "none").lower()
             headers = {
-                "Title": "Odysseus connectivity test",
+                "Title": "Origin connectivity test",
                 "Tags": "white_check_mark",
                 "Priority": "default",
             }
@@ -525,7 +551,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     r = await client.post(
                         full_url,
-                        content="Connectivity test from Odysseus. If you see this on your phone, ntfy is wired up correctly.",
+                        content="Connectivity test from Origin. If you see this on your phone, ntfy is wired up correctly.",
                         headers=headers,
                     )
                 if r.is_success:

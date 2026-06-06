@@ -21,7 +21,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from huggingface_hub import HfApi
 

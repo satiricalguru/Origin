@@ -2,8 +2,8 @@
 // Slash command handlers and dispatcher, extracted from chat.js
 
 window.cancelActiveTour = function cancelActiveTour() {
-  document.querySelectorAll('.odysseus-highlight, .odysseus-highlight-click')
-    .forEach(e => e.classList.remove('odysseus-highlight', 'odysseus-highlight-click'));
+  document.querySelectorAll('.origin-highlight, .origin-highlight-click')
+    .forEach(e => e.classList.remove('origin-highlight', 'origin-highlight-click'));
   document.querySelectorAll('.tour-halo').forEach(e => e.remove());
   document.getElementById('tour-tooltip')?.remove();
   document.body?.classList.remove('tour-active');
@@ -42,6 +42,7 @@ const PROVIDER_PATTERNS = [
   { re: /^gsk_/,             name: 'Groq',       url: 'https://api.groq.com/openai/v1' },
   { re: /^AIza/,             name: 'Gemini',     url: 'https://generativelanguage.googleapis.com/v1beta/openai' },
   { re: /^xai-/,             name: 'xAI',        url: 'https://api.x.ai/v1' },
+  { re: /^nvapi-/,           name: 'Nvidia',     url: 'https://integrate.api.nvidia.com/v1' },
 ];
 const SETUP_PROVIDER_URLS = {
   deepseek: { name: 'DeepSeek', url: 'https://api.deepseek.com/v1' },
@@ -53,8 +54,9 @@ const SETUP_PROVIDER_URLS = {
   groq: { name: 'Groq', url: 'https://api.groq.com/openai/v1' },
   gemini: { name: 'Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai' },
   google: { name: 'Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  nvidia: { name: 'Nvidia', url: 'https://integrate.api.nvidia.com/v1' },
 };
-const SETUP_PROVIDER_NAMES = ['deepseek', 'openai', 'openrouter', 'ollama', 'xai', 'anthropic', 'groq', 'gemini'];
+const SETUP_PROVIDER_NAMES = ['deepseek', 'openai', 'openrouter', 'ollama', 'xai', 'anthropic', 'groq', 'gemini', 'nvidia'];
 const SETUP_PROVIDER_HINT = SETUP_PROVIDER_NAMES.slice(0, -1).join(', ') + ', or ' + SETUP_PROVIDER_NAMES[SETUP_PROVIDER_NAMES.length - 1];
 const SETUP_LOCAL_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>';
 const SETUP_API_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
@@ -77,6 +79,7 @@ function _setupProviderFromInput(input) {
     google: 'gemini',
     xai: 'xai',
     grok: 'xai',
+    nvidia: 'nvidia',
   };
   return SETUP_PROVIDER_URLS[aliases[raw] || raw] || null;
 }
@@ -93,6 +96,7 @@ function _extractSetupProviderCredential(input) {
     ['groq', 'groq'],
     ['google', 'gemini'], ['gemini', 'gemini'],
     ['x ai', 'xai'], ['xai', 'xai'], ['grok', 'xai'],
+    ['nvidia', 'nvidia'],
   ];
   for (const [alias, key] of providerAliases) {
     const re = new RegExp('(^|\\s|[,;:])(' + alias.replace(/\s+/g, '\\s+') + ')(?=$|\\s|[,;:])', 'i');
@@ -124,7 +128,7 @@ function _normalizeSetupBaseUrl(raw) {
 }
 
 function _clearSetupGuideMessages() {
-  Storage.remove('odysseus-setup-guide-messages');
+  Storage.remove('origin-setup-guide-messages');
 }
 
 async function _showSetupRetryPrompt() {
@@ -256,7 +260,7 @@ function slashReply(text) {
   div.className = 'msg msg-ai';
   const role = document.createElement('div');
   role.className = 'role';
-  role.textContent = 'Odysseus';
+  role.textContent = 'Origin';
   div.appendChild(role);
   const body = document.createElement('div');
   body.className = 'body';
@@ -325,7 +329,7 @@ function typewriterReply(text, options = {}) {
     div.className = 'msg msg-ai';
     const role = document.createElement('div');
     role.className = 'role';
-    role.textContent = 'Odysseus';
+    role.textContent = 'Origin';
     div.appendChild(role);
     const body = document.createElement('div');
     body.className = 'body';
@@ -365,7 +369,7 @@ function typewriterBlocksReply(blocks, options = {}) {
     div.className = 'msg msg-ai';
     const role = document.createElement('div');
     role.className = 'role';
-    role.textContent = 'Odysseus';
+    role.textContent = 'Origin';
     div.appendChild(role);
     const body = document.createElement('div');
     body.className = 'body';
@@ -530,7 +534,7 @@ async function connectDetectedSetupEndpoint(detected) {
   spinnerDiv.className = 'msg msg-ai';
   const spinnerRole = document.createElement('div');
   spinnerRole.className = 'role';
-  spinnerRole.textContent = 'Odysseus';
+  spinnerRole.textContent = 'Origin';
   spinnerDiv.appendChild(spinnerRole);
   const spinnerBody = document.createElement('div');
   spinnerBody.className = 'body';
@@ -1793,8 +1797,8 @@ async function _cmdDemo(args, ctx) {
   let _draftObserver = null;
   let _draftPoll = null;
   const _clearTour = () => {
-    document.querySelectorAll('.odysseus-highlight, .odysseus-highlight-click').forEach(e => {
-      e.classList.remove('odysseus-highlight', 'odysseus-highlight-click');
+    document.querySelectorAll('.origin-highlight, .origin-highlight-click').forEach(e => {
+      e.classList.remove('origin-highlight', 'origin-highlight-click');
     });
     document.querySelectorAll('.tour-halo').forEach(e => e.remove());
     document.getElementById('tour-tooltip')?.remove();
@@ -1980,7 +1984,7 @@ async function _cmdDemo(args, ctx) {
   function showStep(sel, text, mode = 'next', isFirst = false, stepOpts = {}) {
     return new Promise(resolve => {
       if (cancelled) return resolve('cancel');
-      document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+      document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
       document.querySelectorAll('.tour-halo').forEach(e => e.remove());
 
       // Support multiple selectors (comma-separated)
@@ -2000,7 +2004,7 @@ async function _cmdDemo(args, ctx) {
       const advanceOnClick = !!stepOpts.advanceOnClick;
       const pulseNext = !!stepOpts.pulseNext;
 
-      targets.forEach(t => t.classList.add('odysseus-highlight'));
+      targets.forEach(t => t.classList.add('origin-highlight'));
       const halos = breathing ? targets.map(makeHalo) : [];
       // Reset tooltip into the "pre-fade" state so the new step phases in.
       tooltip.classList.remove('tour-fade-in');
@@ -2099,7 +2103,7 @@ async function _cmdDemo(args, ctx) {
           targets.forEach(t => t.removeEventListener(evt, onDocClickCapture, true));
         });
         if (messageInputListener) document.removeEventListener('keydown', messageInputListener, true);
-        if (modelListener) document.removeEventListener('odysseus:model-picked', modelListener);
+        if (modelListener) document.removeEventListener('origin:model-picked', modelListener);
         if (streamHandle) streamHandle.cancel();
         halos.forEach(h => h.destroy());
       };
@@ -2121,7 +2125,7 @@ async function _cmdDemo(args, ctx) {
       }
       if (sels.includes('#model-picker-btn')) {
         modelListener = onModelPicked;
-        document.addEventListener('odysseus:model-picked', modelListener, { once: true });
+        document.addEventListener('origin:model-picked', modelListener, { once: true });
       }
 
       tooltip.addEventListener('click', onClick);
@@ -2141,7 +2145,7 @@ async function _cmdDemo(args, ctx) {
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
   // ── Welcome ──
-  await typewriterReply('Welcome to Odysseus! Lets begin the tour!');
+  await typewriterReply('Welcome to Origin! Lets begin the tour!');
   // Beat between the welcome line and the first hint so it doesn't snap in.
   await delay(900);
 
@@ -2179,8 +2183,8 @@ async function _cmdDemo(args, ctx) {
     { sel: '#sidebar-new-chat-btn', text: 'Start a new chat here. <b>Click it.</b> You can do it!', mode: 'click',
       before() { if (sidebar?.classList.contains('hidden')) sidebar.classList.remove('hidden'); } },
     { sel: '#model-picker-btn',   text: 'Pick your LLM, Local or API.', advanceOnClick: true },
-    { sel: '#mode-agent-btn',     text: '<b>Agent mode</b> gives Odysseus more control of the app when your model supports tools: create a theme, download a model, make a daily task, organize things, and more.', mode: 'click' },
-    { sel: '#web-toggle-btn',     text: 'Toggle tools like <b>web search</b>. Odysseus comes with private built-in <b>SearXNG</b> search.', mode: 'click' },
+    { sel: '#mode-agent-btn',     text: '<b>Agent mode</b> gives Origin more control of the app when your model supports tools: create a theme, download a model, make a daily task, organize things, and more.', mode: 'click' },
+    { sel: '#web-toggle-btn',     text: 'Toggle tools like <b>web search</b>. Origin comes with private built-in <b>SearXNG</b> search.', mode: 'click' },
     { sel: '#overflow-plus-btn',  text: 'More tools can be found here, or in your sidebar. <b>Click to peek.</b>',
       advanceOnClick: true, pulseNext: true, afterDelay: 2200 },
     { sel: '#message',            text: 'Write your prompt here. Drag and drop files to attach them. <b>/prompt</b> for random prompt, <b>/help</b> for more.',
@@ -2200,7 +2204,7 @@ async function _cmdDemo(args, ctx) {
     await delay(step.afterDelay || 750);
     // After the message input step, wait for any active stream to finish
     if (step.sel === '#message' && _isStreamingFn()) {
-      document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+      document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
       tooltip.style.display = 'none';
       await new Promise(r => {
         const check = setInterval(() => { if (!_isStreamingFn()) { clearInterval(check); r(); } }, 300);
@@ -2210,7 +2214,7 @@ async function _cmdDemo(args, ctx) {
   }
 
   _clearTour();
-  await typewriterReply('Odysseus is yours to explore, enjoy the voyage!');
+  await typewriterReply('Origin is yours to explore, enjoy the voyage!');
   return true;
 }
 
@@ -2301,7 +2305,7 @@ async function _cmdTourCompare(args, ctx) {
   }
 
   const _clear = () => {
-    document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+    document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
     _clearHalos();
     tooltip.remove();
     document.body.classList.remove('tour-active');
@@ -2579,7 +2583,7 @@ async function _cmdTourCookbook(args, ctx) {
     document.querySelectorAll('.tour-halo').forEach(e => e.remove());
   }
   const _clear = () => {
-    document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+    document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
     _clearHalos();
     tooltip.remove();
     document.body.classList.remove('tour-active');
@@ -2808,7 +2812,7 @@ async function _cmdTourTheme(args, ctx) {
     document.querySelectorAll('.tour-halo').forEach(e => e.remove());
   }
   const _clear = () => {
-    document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+    document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
     _clearHalos();
     tooltip.remove();
     document.body.classList.remove('tour-active');
@@ -2925,7 +2929,7 @@ async function _cmdTourTheme(args, ctx) {
   // work as a fallback (read past without touching anything).
   const steps = [
     { sel: '#theme-popup',
-      text: '<b>Welcome to Theme.</b> Odysseus is yours to customize!',
+      text: '<b>Welcome to Theme.</b> Origin is yours to customize!',
       placement: 'center-above',
       before: () => _clickTab('theme-tab-browse') },
     { sel: '#themeGrid',
@@ -3157,7 +3161,7 @@ async function _cmdTourSettings(args, ctx) {
       text: '<b>AI Defaults</b> — three roles share the work. Let\'s walk through them.',
       before: () => _clickNav('ai') },
     { sel: '#settings-modal .admin-card:has(#set-defaultModelSelect)',
-      text: '<b>Default Chat Model</b> — your main model. The one Odysseus reaches for whenever you start a new chat.',
+      text: '<b>Default Chat Model</b> — your main model. The one Origin reaches for whenever you start a new chat.',
       before: () => _clickNav('ai') },
     { sel: '#settings-modal .admin-card:has(#set-utilityModelSelect)',
       text: '<b>Utility Model</b> — your hard-working sidekick. Runs background tasks (compaction, cleanup, auto-naming, summarization) so your chat model doesn\'t burn cycles on chores. <b>Recommend a small local model</b> here — it\'s free and always on.',
@@ -3178,7 +3182,7 @@ async function _cmdTourSettings(args, ctx) {
       text: '<b>Email</b> — sync schedule, drafts, snooze defaults — everything email-flow related.',
       before: () => _clickNav('email') },
     { sel: '#settings-modal .settings-nav-item[data-settings-tab="reminders"]',
-      text: '<b>Reminders</b> — quiet hours and how Odysseus nudges you about calendar + urgent email.',
+      text: '<b>Reminders</b> — quiet hours and how Origin nudges you about calendar + urgent email.',
       before: () => _clickNav('reminders') },
   ];
 
@@ -3209,7 +3213,7 @@ async function _cmdTourGallery(args, ctx) {
     _msgEl.value = '';
     _msgEl.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  try { localStorage.setItem('odysseus-notes-first-open-hint-v1', '1'); } catch (_) {}
+  try { localStorage.setItem('origin-notes-first-open-hint-v1', '1'); } catch (_) {}
   document.getElementById('notes-first-open-hint')?.remove();
 
   if (!document.getElementById('tour-styles')) {
@@ -3591,7 +3595,7 @@ async function _cmdTourNotes(args, ctx) {
       text: '<b>Notes</b> is your basic todo list, and also where reminders are managed.',
       placement: 'center-above' },
     { sel: '#notes-pane .notes-pane-body',
-      text: 'Your notes show up here. You can also <b>ask Odysseus in chat</b> to take a note for you.' },
+      text: 'Your notes show up here. You can also <b>ask Origin in chat</b> to take a note for you.' },
     { sel: '#notes-search',
       text: '<b>Search</b> across every note — title, body, tags, the works.' },
     { sel: '#notes-view-toggle',
@@ -4030,7 +4034,7 @@ async function _cmdTourTask1(args, ctx) {
       text: 'Tasks are <b>paused by default</b> — resume whichever ones make sense for you. (Or pause anything that\'s running.)' },
     { sel: '#tasks-modal .modal-body',
       text: 'When enabled, Tasks use the <b>utility model configured in Settings</b> for cleanup and organization jobs.' },
-  ], 'Use Tasks when you want Odysseus to handle background housekeeping.', {
+  ], 'Use Tasks when you want Origin to handle background housekeeping.', {
     continueLabel: 'continue →',
     continueText: '<b>Part 1 done.</b> Want to keep going into <b>adding & managing tasks</b>?',
   });
@@ -4054,7 +4058,7 @@ async function _cmdTourTask2(args, ctx) {
     // re-show it when the user moves past this step so the tour lands
     // back where it started.
     { sel: '#message',
-      text: 'You can also <b>just ask in chat</b> — say "every weekday at 9am check for urgent emails" and Odysseus will create the task for you.',
+      text: 'You can also <b>just ask in chat</b> — say "every weekday at 9am check for urgent emails" and Origin will create the task for you.',
       before: () => document.getElementById('tasks-modal')?.classList.add('hidden'),
       after:  () => document.getElementById('tasks-modal')?.classList.remove('hidden') },
   ], 'That\'s Tasks. Have it run the background bits so you can stay in chat.');
@@ -4143,7 +4147,7 @@ async function _cmdTourResearch(args, ctx) {
     document.querySelectorAll('.tour-halo').forEach(e => e.remove());
   }
   const _clear = () => {
-    document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+    document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
     _clearHalos();
     tooltip.remove();
     document.body.classList.remove('tour-active');
@@ -4357,7 +4361,7 @@ async function _cmdTourLibrary(args, ctx) {
     document.querySelectorAll('.tour-halo').forEach(e => e.remove());
   }
   const _clear = () => {
-    document.querySelectorAll('.odysseus-highlight').forEach(e => e.classList.remove('odysseus-highlight'));
+    document.querySelectorAll('.origin-highlight').forEach(e => e.classList.remove('origin-highlight'));
     _clearHalos();
     tooltip.remove();
     document.body.classList.remove('tour-active');
@@ -4562,7 +4566,7 @@ async function _cmdPrompt(args, ctx) {
     for (const p of list) all.push(p.prompt);
   }
   if (!all.length) { slashReply('No prompts available'); return true; }
-  const firstUseKey = 'odysseus_prompt_command_used';
+  const firstUseKey = 'origin_prompt_command_used';
   const firstUse = localStorage.getItem(firstUseKey) !== '1';
   const prompt = firstUse
     ? 'i have no imagination help me'
@@ -4882,7 +4886,7 @@ const _ODYSSEY_QUOTES = [
   "A man who has been through bitter experiences and travelled far enjoys even his sufferings after a time.",
   "For a friend with an understanding heart is worth no less than a brother.",
   "The wine urges me on, the bewitching wine, which sets even a wise man to singing and to laughing gently.",
-  "I am Odysseus, son of Laertes, known to all for my cunning. My fame reaches even unto heaven.",
+  "I am Origin, son of Laertes, known to all for my cunning. My fame reaches even unto heaven.",
 ];
 
 const _8BALL = [
@@ -4924,7 +4928,7 @@ function _eggRender(html) {
   div.className = 'msg msg-ai';
   const role = document.createElement('div');
   role.className = 'role';
-  role.textContent = 'Odysseus';
+  role.textContent = 'Origin';
   div.appendChild(role);
   const body = document.createElement('div');
   body.className = 'body';
@@ -5025,7 +5029,7 @@ async function _cmdOdyssey(args, ctx) {
 }
 
 async function _cmdAscii(args, ctx) {
-  const text = args.join(' ') || 'Odysseus';
+  const text = args.join(' ') || 'Origin';
   const FONT = {
     'A':'  #  \n # # \n#####\n#   #\n#   #','B':'#### \n#   #\n#### \n#   #\n#### ','C':' ####\n#    \n#    \n#    \n ####',
     'D':'#### \n#   #\n#   #\n#   #\n#### ','E':'#####\n#    \n###  \n#    \n#####','F':'#####\n#    \n###  \n#    \n#    ',
@@ -5127,7 +5131,7 @@ async function _cmdWisdom(args, ctx) {
 
 async function _cmdUptime(args, ctx) {
   const now = Date.now();
-  const loaded = window._odysseusLoadTime || now;
+  const loaded = window._originLoadTime || now;
   const diff = now - loaded;
   const h = Math.floor(diff / 3600000);
   const m = Math.floor((diff % 3600000) / 60000);
@@ -5631,6 +5635,77 @@ const COMMANDS = {
     handler: _cmdNote,
     usage: '/note text'
   },
+  // ── IDE Commands ──
+  'ide-new': {
+    alias: ['i-new'],
+    category: 'IDE',
+    help: 'Create a new text file in the IDE',
+    handler: async (args) => { _ideCmd('new', args); return true; },
+    usage: '/ide-new [filename]'
+  },
+  'ide-open': {
+    alias: ['i-open'],
+    category: 'IDE',
+    help: 'Open a file by path in the IDE',
+    handler: async (args) => { _ideCmd('open', args); return true; },
+    usage: '/ide-open [path]'
+  },
+  'ide-format': {
+    alias: ['i-fmt'],
+    category: 'IDE',
+    help: 'Format the current document in the IDE',
+    handler: async () => { _ideCmd('format'); return true; },
+    usage: '/ide-format'
+  },
+  'ide-save': {
+    alias: ['i-save'],
+    category: 'IDE',
+    help: 'Save the current file in the IDE',
+    handler: async () => { _ideCmd('save'); return true; },
+    usage: '/ide-save'
+  },
+  'ide-find': {
+    alias: ['i-find', 'ide-search'],
+    category: 'IDE',
+    help: 'Search across files in the IDE workspace',
+    handler: async (args) => { _ideCmd('find', args); return true; },
+    usage: '/ide-find [query]'
+  },
+  'ide-terminal': {
+    alias: ['i-term'],
+    category: 'IDE',
+    help: 'Run a command in the IDE terminal',
+    handler: async (args) => { _ideCmd('terminal', args); return true; },
+    usage: '/ide-terminal [command]'
+  },
+  'ide-go': {
+    alias: ['i-go'],
+    category: 'IDE',
+    help: 'Go to line number in the IDE',
+    handler: async (args) => { _ideCmd('go', args); return true; },
+    usage: '/ide-go [line]'
+  },
+  'ide-git': {
+    alias: ['i-git'],
+    category: 'IDE',
+    help: 'Show git status in the IDE',
+    handler: async () => { _ideCmd('git'); return true; },
+    usage: '/ide-git'
+  },
+  'ide-close': {
+    alias: ['i-close'],
+    category: 'IDE',
+    help: 'Close the current IDE editor tab',
+    handler: async () => { _ideCmd('close'); return true; },
+    usage: '/ide-close'
+  },
+  'ide-palette': {
+    alias: ['i-palette', 'ide-cmd'],
+    category: 'IDE',
+    help: 'Open the IDE command palette',
+    handler: async () => { _ideCmd('palette'); return true; },
+    usage: '/ide-palette'
+  },
   // ── Easter eggs (hidden from /help) ──
   flip:    { alias: ['coin'],       hidden: true, handler: _cmdFlip,    usage: '/flip' },
   roll:    { alias: ['dice', 'r'],  hidden: true, handler: _cmdRoll,    usage: '/roll [NdN|sides]' },
@@ -5688,6 +5763,88 @@ const LEGACY_ALIASES = {
   'mkdir':       { parent: 'session', sub: 'new' },
   'status':      { parent: 'toggle', sub: '_show' }
 };
+
+// ── IDE command dispatcher ────────────────────────────────────────
+
+function _ideCmd(action, args) {
+    const ide = document.getElementById('ide-modal');
+    if (!ide || ide.classList.contains('hidden')) {
+        // Open IDE first
+        import('./ide.js').then(m => m.default.open());
+        setTimeout(() => _ideCmd(action, args), 300);
+        return;
+    }
+    switch (action) {
+        case 'new':
+            const name = (args || []).join(' ') || 'untitled.txt';
+            uiModule.showToast('Create file via IDE Explorer context menu');
+            import('./ide.js').then(m => {
+                m.default.open();
+                setTimeout(() => {
+                    const explorerFiles = document.querySelector('.ide-tree-files');
+                    if (explorerFiles) {
+                        const addBtn = document.querySelector('.ide-context-menu-item span');
+                        if (addBtn) addBtn.click();
+                    }
+                }, 500);
+            });
+            break;
+        case 'open':
+            const path = (args || []).join(' ');
+            if (!path) { uiModule.showToast('Specify a file path'); break; }
+            import('./ide.js').then(m => {
+                m.default.open();
+                setTimeout(() => m.default.openFile(path), 300);
+            });
+            break;
+        case 'format':
+            // Trigger format if IDE has format function
+            document.getElementById('ide-format-btn')?.click();
+            break;
+        case 'save':
+            document.getElementById('ide-save-btn')?.click();
+            break;
+        case 'find':
+            const query = (args || []).join(' ');
+            if (query) {
+                const input = document.getElementById('ide-search-query-input');
+                if (input) { input.value = query; input.dispatchEvent(new Event('input')); }
+            }
+            const searchNav = document.querySelector('[data-panel="search"]');
+            if (searchNav) searchNav.click();
+            break;
+        case 'terminal':
+            const cmd = (args || []).join(' ');
+            const termInput = document.getElementById('ide-terminal-input');
+            if (termInput && cmd) { termInput.value = cmd; termInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }
+            else {
+                const bp = document.getElementById('ide-bottom-panel');
+                if (bp) { bp.classList.remove('collapsed'); document.getElementById('ide-terminal-toggle').textContent = '▼'; }
+                setTimeout(() => document.getElementById('ide-terminal-input')?.focus(), 100);
+            }
+            break;
+        case 'go':
+            const line = parseInt((args || [])[0], 10);
+            if (!isNaN(line) && window.monaco && window._monacoEditor) {
+                window._monacoEditor.revealLine(line);
+                window._monacoEditor.setPosition({ lineNumber: line, column: 1 });
+                window._monacoEditor.focus();
+            }
+            break;
+        case 'git':
+            const gitNav = document.querySelector('[data-panel="source-control"]');
+            if (gitNav) gitNav.click();
+            break;
+        case 'close':
+            document.querySelector('.ide-tab.active .ide-tab-close')?.click();
+            break;
+        case 'palette':
+            // Trigger command palette via keyboard
+            const paletteEvent = new KeyboardEvent('keydown', { key: 'p', metaKey: true, shiftKey: true, bubbles: true });
+            document.dispatchEvent(paletteEvent);
+            break;
+    }
+}
 
 // ── Dispatch helpers ──────────────────────────────────────────────
 
@@ -5950,7 +6107,7 @@ export function clearSetupMode(preservePendingState = false) {
   }
 }
 
-export { handleSlashCommand, handleSetupInput, handleSetupWizard, slashReply, typewriterReply };
+export { handleSlashCommand, handleSetupInput, handleSetupWizard, slashReply, typewriterReply, _ALIAS_MAP };
 
 const slashCommands = {
   initSlashCommands,

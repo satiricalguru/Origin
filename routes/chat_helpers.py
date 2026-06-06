@@ -94,7 +94,7 @@ def _enforce_chat_privileges(request, sess) -> None:
     if cap <= 0:
         return
 
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     from core.database import Session as _DbSess, ChatMessage as _Cm
     db = SessionLocal()
     try:
@@ -103,7 +103,7 @@ def _enforce_chat_privileges(request, sess) -> None:
             .join(_DbSess, _Cm.session_id == _DbSess.id)
             .filter(_DbSess.owner == user,
                     _Cm.role == "user",
-                    _Cm.timestamp >= _dt.utcnow() - _td(days=1))
+                    _Cm.timestamp >= _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=1))
             .count()
         )
     finally:

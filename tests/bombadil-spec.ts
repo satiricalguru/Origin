@@ -1,5 +1,5 @@
 /**
- * Bombadil spec for Odysseus UI
+ * Bombadil spec for Origin UI
  */
 import { extract, always, eventually, now, actions } from "@antithesishq/bombadil";
 export * from "@antithesishq/bombadil/defaults";

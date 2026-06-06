@@ -17,11 +17,10 @@ from dotenv import load_dotenv
 # is silently ignored and the user is unexpectedly forced to log in (issue #142).
 # utf-8-sig reads plain UTF-8 (no BOM) identically, so this is safe everywhere.
 load_dotenv(encoding="utf-8-sig")
-import uuid
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from fastapi import FastAPI, Request, HTTPException
@@ -63,7 +62,23 @@ app = FastAPI(
 )
 
 # ========= CORS =========
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://127.0.0.1").split(",")
+# Parse and validate ALLOWED_ORIGINS. The env var is a comma-separated list
+# of full origin URLs (e.g. "https://origin.example.com"). We strip
+# whitespace, drop empties, and require each entry to start with http:// or
+# https:// so a typo like "localhost:7000" (no scheme) doesn't silently
+# never match anything.
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://127.0.0.1")
+allowed_origins = []
+for o in _raw_origins.split(","):
+    o = o.strip()
+    if not o:
+        continue
+    if not (o.startswith("http://") or o.startswith("https://")):
+        logger.warning(f"Ignoring ALLOWED_ORIGINS entry without scheme: {o!r}")
+        continue
+    allowed_origins.append(o)
+if not allowed_origins:
+    allowed_origins = ["http://localhost", "http://127.0.0.1"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -75,8 +90,8 @@ app.add_middleware(
         "Content-Type",
         "X-API-Key",
         "X-Auth-Token",
-        "X-Odysseus-Internal-Token",
-        "X-Odysseus-Owner",
+        "X-Origin-Internal-Token",
+        "X-Origin-Owner",
         "X-Requested-With",
         "X-TZ-Offset",
     ],
@@ -129,10 +144,21 @@ app.add_middleware(_RequestTimeoutMiddleware)
 # ========= AUTH =========
 from routes.auth_routes import setup_auth_routes, SESSION_COOKIE
 
+def _bool_env(name, default="false"):
+    """Parse a boolean env var with validation. Logs a warning on unrecognized values."""
+    raw = os.getenv(name, default)
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    logger.warning("%s=%r is not a recognized boolean — treating as %s", name, raw, default)
+    return default.strip().lower() in ("1", "true", "yes", "on")
+
 auth_manager = AuthManager()
 app.state.auth_manager = auth_manager
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() != "false"
-LOCALHOST_BYPASS = os.getenv("LOCALHOST_BYPASS", "false").lower() == "true"
+AUTH_ENABLED = _bool_env("AUTH_ENABLED", "true")
+LOCALHOST_BYPASS = _bool_env("LOCALHOST_BYPASS", "false")
 
 if AUTH_ENABLED:
     AUTH_EXEMPT_EXACT = {
@@ -161,6 +187,10 @@ if AUTH_ENABLED:
     _token_cache: dict = {}
     _token_cache_lock = _asyncio.Lock()
     _token_cache_dirty = True
+    # Throttle for the fire-and-forget `last_used_at` DB writes. Keyed by
+    # token id; we only enqueue an update if the last one was >60s ago.
+    _last_used_cache: dict = {}
+    import time  # local import keeps the top of the file uncluttered
 
     def _token_cache_invalidate():
         nonlocal_dict = app.state.__dict__
@@ -199,7 +229,7 @@ if AUTH_ENABLED:
         forwarding headers. A bare ``client.host in ('127.0.0.1','::1')`` check is
         unsafe behind a Cloudflare tunnel / reverse proxy: those connect from
         loopback, so a remote visitor would otherwise inherit local trust and
-        slip past LOCALHOST_BYPASS or spoof the internal-tool path. Odysseus's own
+        slip past LOCALHOST_BYPASS or spoof the internal-tool path. Origin's own
         in-process agent loopback calls carry none of these headers, so they still
         qualify."""
         host = request.client.host if request.client else None
@@ -224,10 +254,10 @@ if AUTH_ENABLED:
                 _hdr = request.headers.get(INTERNAL_TOOL_HEADER)
                 if _hdr and _hdr == _ITT and _is_trusted_loopback(request):
                     # Impersonation: when the agent's loopback call sets
-                    # X-Odysseus-Owner, attribute the request to that user only
+                    # X-Origin-Owner, attribute the request to that user only
                     # if they exist. Authorization checks remain separate; this
                     # is just owner attribution for notes/calendar/etc.
-                    _impersonate = (request.headers.get("X-Odysseus-Owner") or "").strip()
+                    _impersonate = (request.headers.get("X-Origin-Owner") or "").strip()
                     _auth_mgr = getattr(request.app.state, "auth_manager", None) or auth_manager
                     if _impersonate and _impersonate in getattr(_auth_mgr, "users", {}):
                         request.state.current_user = _impersonate
@@ -277,12 +307,16 @@ if AUTH_ENABLED:
                         # Update last_used_at off the hot path. Doing it
                         # inline used to keep the request open across an
                         # extra commit; do it fire-and-forget instead.
-                        async def _touch_last_used(tid: str):
+                        # Throttle: skip if we already touched this token
+                        # within the last 60 seconds — a busy integration
+                        # was creating thousands of pending asyncio
+                        # tasks per minute and a DB write per request.
+                        async def _touch_last_used(tid: str, key: str = matched_id):
                             def _do():
                                 _db = SessionLocal()
                                 try:
                                     _db.query(ApiToken).filter(ApiToken.id == tid).update(
-                                        {"last_used_at": datetime.utcnow()}
+                                        {"last_used_at": datetime.now(timezone.utc)}
                                     )
                                     _db.commit()
                                 finally:
@@ -291,7 +325,11 @@ if AUTH_ENABLED:
                                 await _asyncio.to_thread(_do)
                             except Exception:
                                 pass
-                        _asyncio.create_task(_touch_last_used(matched_id))
+                        now = time.time()
+                        last = _last_used_cache.get(matched_id, 0.0)
+                        if now - last >= 60:
+                            _last_used_cache[matched_id] = now
+                            _asyncio.create_task(_touch_last_used(matched_id))
                         # Keep bearer-token callers out of normal cookie/user
                         # routes. API-aware routes can read api_token_owner.
                         request.state.current_user = "api"
@@ -593,6 +631,10 @@ app.include_router(setup_calendar_routes())
 from routes.shell_routes import setup_shell_routes
 app.include_router(setup_shell_routes())
 
+# IDE Integration
+from routes.ide_routes import setup_ide_routes
+app.include_router(setup_ide_routes())
+
 # Cookbook (model download/serve/cache, cookbook state sync)
 from routes.cookbook_routes import setup_cookbook_routes
 app.include_router(setup_cookbook_routes())
@@ -720,6 +762,10 @@ async def serve_backgrounds(request: Request):
     """Sandbox page for prototyping background effects. No auth required."""
     return _serve_html_with_nonce(request, abs_join(BASE_DIR, "static/backgrounds.html"))
 
+@app.get("/landing")
+async def serve_landing(request: Request):
+    return _serve_html_with_nonce(request, abs_join(BASE_DIR, "static/landing.html"))
+
 @app.get("/login")
 async def serve_login(request: Request):
     return _serve_html_with_nonce(request, abs_join(BASE_DIR, "static/login.html"))
@@ -731,7 +777,7 @@ async def get_version():
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/api/runtime")
 async def runtime_info() -> Dict[str, object]:
@@ -755,8 +801,10 @@ async def runtime_info() -> Dict[str, object]:
 
 # ========= LIFECYCLE =========
 
-@app.on_event("startup")
-async def startup_event():
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global upload_cleanup_task
     logger.info("Application starting up...")
     webhook_manager.set_loop(asyncio.get_running_loop())
@@ -829,15 +877,15 @@ async def startup_event():
         try:
             import httpx
             endpoints = model_discovery.get_endpoints() if model_discovery else []
-            for ep in endpoints[:5]:
-                url = ep.get("url", "").replace("/chat/completions", "/models")
-                if url:
-                    try:
-                        async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for ep in endpoints[:5]:
+                    url = ep.get("url", "").replace("/chat/completions", "/models")
+                    if url:
+                        try:
                             await client.get(url)
-                        logger.info(f"Warmup ping OK: {url}")
-                    except Exception as e:
-                        logger.debug(f"Warmup ping failed for endpoint: {e}")
+                            logger.info(f"Warmup ping OK: {url}")
+                        except Exception as e:
+                            logger.debug(f"Warmup ping failed for endpoint: {e}")
         except Exception as e:
             logger.debug(f"Warmup ping skipped: {e}")
 
@@ -926,13 +974,13 @@ async def startup_event():
 
     # Start scheduled task runner — skip when running under a cron-driven
     # deployment where an external worker drives task firing. Mirrors
-    # `ODYSSEUS_INPROCESS_POLLERS` from the email pollers.
-    _tasks_inprocess = os.environ.get("ODYSSEUS_INPROCESS_TASKS", "1").strip().lower()
+    # `ORIGIN_INPROCESS_POLLERS` from the email pollers.
+    _tasks_inprocess = os.environ.get("ORIGIN_INPROCESS_TASKS", "1").strip().lower()
     if _tasks_inprocess not in ("0", "false", "no", "off", ""):
         await task_scheduler.start()
     else:
         logger.info(
-            "In-process task scheduler disabled (ODYSSEUS_INPROCESS_TASKS=0); "
+            "In-process task scheduler disabled (ORIGIN_INPROCESS_TASKS=0); "
             "drive task firing externally (e.g. cron)."
         )
     # Periodic null-owner sweep — re-runs the legacy-owner assignment hourly
@@ -981,8 +1029,8 @@ async def startup_event():
     _startup_tasks.append(asyncio.create_task(_skill_audit_nightly_loop()))
     logger.info("Application startup complete")
 
-@app.on_event("shutdown")
-async def shutdown_event():
+    yield
+
     logger.info("Application shutting down...")
     if upload_cleanup_task:
         upload_cleanup_task.cancel()
@@ -1006,3 +1054,5 @@ async def shutdown_event():
     except Exception as e:
         logger.warning(f"MCP shutdown error: {e}")
     logger.info("Application shutdown complete")
+
+app.router.lifespan_context = lifespan

@@ -27,6 +27,7 @@ let _activeTabIdx = -1;
 let _activePanel = 'explorer'; // 'explorer', 'chat', 'notes', 'tasks'
 let _terminalHistory = [];
 let _ideSessionId = null; // Dedicated IDE copilot session
+let _ideSessionModel = null; // Current model of the dedicated IDE copilot session
 let _ideRendered = false; // Guard against re-rendering IDE DOM
 let _autoSaveEnabled = false;
 let _autoSaveTimer = null;
@@ -92,6 +93,7 @@ export async function open() {
         _renderWelcomePage();
     }
     _loadMonaco();
+    _loadCopilotHistory();
 
     // Attach keybindings
     window.addEventListener('keydown', _ideKeydownHandler);
@@ -458,6 +460,9 @@ function _renderIDE() {
                     <button class="ide-nav-item ${_activePanel === 'tasks' ? 'active' : ''}" data-panel="tasks" title="Scheduler Tasks">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></svg>
                     </button>
+                    <button class="ide-nav-item ${_activePanel === 'source-control' ? 'active' : ''}" data-panel="source-control" title="Source Control (Git)">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/><path d="M6 15a9 9 0 0 1 9-9"/><circle cx="18" cy="6" r="0" fill="none"/></svg>
+                    </button>
 
                     <!-- Bottom Profile and Settings Activity Buttons -->
                     <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px; width: 100%; align-items: center; padding-bottom: 8px;">
@@ -489,11 +494,17 @@ function _renderIDE() {
                         <!-- Tab Strip -->
                         <div class="ide-tab-strip" id="ide-tab-strip"></div>
                         
-                        <!-- Editor Toolbar (Save & Run actions) -->
+                        <!-- Breadcrumbs Bar -->
+                    <div id="ide-breadcrumbs" style="display:none;padding:2px 12px;border-bottom:1px solid var(--border);background:var(--panel);font-size:11px;flex-shrink:0;"></div>
+
+                    <!-- Editor Toolbar (Save, Run, Format actions) -->
                         <div class="ide-editor-toolbar" id="ide-editor-toolbar" style="display:none;">
                             <button class="ide-toolbar-btn primary" id="ide-save-btn">Save</button>
                             <button class="ide-toolbar-btn" id="ide-run-btn">
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px;"><path d="M8 5v14l11-7z"/></svg> Run
+                            </button>
+                            <button class="ide-toolbar-btn" id="ide-format-btn" title="Format Document">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M21 10H3"/><path d="M21 6H3"/><path d="M21 14H3"/><path d="M21 18H3"/></svg> Format
                             </button>
                         </div>
 
@@ -525,7 +536,7 @@ function _renderIDE() {
                 <div class="ide-right-sidebar" id="ide-right-sidebar">
                     <div class="ide-right-tabs">
                         <span class="ide-right-tab active" data-tab="chat">Chat</span>
-                        <span class="ide-right-tab" data-tab="codex">Codex</span>
+                        <span class="ide-right-tab" data-tab="codex" id="ide-codex-tab">Codex</span>
                     </div>
                     <div class="ide-right-chat-container">
                         <div class="ide-right-chat-messages" id="ide-right-chat-messages">
@@ -583,6 +594,9 @@ function _renderIDE() {
                     </div>
                 </div>
                 <div class="ide-status-right">
+                    <div class="ide-status-item" id="status-autosave" title="Click to toggle Auto Save">
+                        <span id="status-autosave-label">Auto Save: OFF</span>
+                    </div>
                     <div class="ide-status-item" id="status-indent" title="Click to toggle indent (Tab size: 4)">
                         <span id="status-indent-label">Spaces: 4</span>
                     </div>
@@ -631,9 +645,11 @@ function _renderIDE() {
         }, 300);
     });
 
-    // Wire Save / Run button triggers
+    // Wire Save / Run / Format button triggers
     document.getElementById('ide-save-btn').addEventListener('click', saveCurrentFile);
     document.getElementById('ide-run-btn').addEventListener('click', runCurrentFile);
+    const formatBtn = document.getElementById('ide-format-btn');
+    if (formatBtn) formatBtn.addEventListener('click', _formatDocument);
 
     // Wire Terminal command submissions
     const termInput = document.getElementById('ide-terminal-input');
@@ -641,7 +657,7 @@ function _renderIDE() {
         if (e.key === 'Enter') {
             const cmd = termInput.value.trim();
             if (cmd) {
-                _executeTerminalCommand(cmd);
+                _executeTerminalCommandPty(cmd);
                 termInput.value = '';
             }
         }
@@ -663,6 +679,16 @@ function _renderIDE() {
                 _sendCopilotMessage();
             }
         };
+    }
+
+    // Wire Codex tab — open inline AI code editor
+    const codexTab = document.getElementById('ide-codex-tab');
+    if (codexTab) {
+        codexTab.addEventListener('click', () => {
+            document.querySelectorAll('.ide-right-tab').forEach(t => t.classList.remove('active'));
+            codexTab.classList.add('active');
+            _switchToCodex();
+        });
     }
 
     // Wire context inject button — inserts current file content into copilot textarea
@@ -717,6 +743,15 @@ function _renderIDE() {
 
     // Load dynamic Git details in status bar
     _loadGitBranch();
+
+    // Wire autosave status-bar click
+    const autosaveEl = document.getElementById('status-autosave');
+    if (autosaveEl) {
+        autosaveEl.onclick = (e) => {
+            e.stopPropagation();
+            _toggleAutoSave();
+        };
+    }
 
     // Wire indent status-bar click — toggles "Spaces: N" between 2 / 4 / Tab.
     const indentEl = document.getElementById('status-indent');
@@ -856,6 +891,8 @@ function _switchPanel(panelName) {
         _renderIntegratedNotes(contentEl);
     } else if (panelName === 'tasks') {
         _renderIntegratedTasks(contentEl);
+    } else if (panelName === 'source-control') {
+        _renderSourceControl(contentEl);
     }
 }
 
@@ -876,375 +913,204 @@ async function refreshExplorer() {
 // ──────────────────────────────────────────
 let _expandedDirs = new Set(); // Stores expanded absolute paths
 
+async function _fetchDirFiles(dirPath) {
+    const url = `${API_BASE}/api/ide/files?dir_path=${encodeURIComponent(dirPath)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch directory listing');
+    return await res.json();
+}
+
+let _explorerFilterText = '';
+
+function _applyExplorerFilter() {
+    const nodes = document.querySelectorAll('#ide-section-files-content .ide-tree-node');
+    if (!nodes.length) return;
+    
+    if (!_explorerFilterText) {
+        nodes.forEach(n => { n.style.display = ''; });
+        return;
+    }
+    
+    nodes.forEach(n => {
+        const label = n.querySelector('.ide-tree-label');
+        const text = label ? label.textContent.toLowerCase() : '';
+        if (text.includes(_explorerFilterText)) {
+            n.style.display = '';
+        } else {
+            n.style.display = 'none';
+        }
+    });
+    
+    const visiblePaths = new Set();
+    nodes.forEach(n => {
+        if (n.style.display === '') {
+            const path = n.dataset.path;
+            let parts = path.split('/');
+            while (parts.length > 0) {
+                visiblePaths.add(parts.join('/'));
+                parts.pop();
+            }
+        }
+    });
+    
+    nodes.forEach(n => {
+        if (visiblePaths.has(n.dataset.path)) {
+            n.style.display = '';
+        }
+    });
+}
+
 async function _renderExplorer(container) {
     container.innerHTML = '<div style="font-size:11px;opacity:0.5;padding:8px;">Loading workspace root...</div>';
     
     try {
-        const rootFiles = await _fetchDirFiles('');
         container.innerHTML = '';
         
-        // Prepend workspace switcher input
-        const switcher = document.createElement('div');
-        switcher.className = 'ide-workspace-switcher';
-        switcher.innerHTML = `
-            <label>Workspace Folder</label>
-            <div class="ide-workspace-input-row">
-                <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" value="${_workspaceRoot}" placeholder="Enter absolute directory path..." />
-                <button class="ide-workspace-btn" id="ide-workspace-open-btn">Open</button>
+        // 1. Workspace Folder Switcher & File Filter Input
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'ide-explorer-header-container';
+        headerContainer.style.display = 'flex';
+        headerContainer.style.flexDirection = 'column';
+        headerContainer.style.borderBottom = '1px solid var(--border)';
+        
+        headerContainer.innerHTML = `
+            <div class="ide-workspace-switcher" style="border-bottom: 1px solid var(--border);">
+                <label>Workspace Folder</label>
+                <div class="ide-workspace-input-row">
+                    <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" value="${_workspaceRoot}" placeholder="Enter absolute directory path..." />
+                    <button class="ide-workspace-btn" id="ide-workspace-open-btn">Open</button>
+                </div>
+            </div>
+            <div class="ide-workspace-filter" style="padding: 6px 12px; background-color: #252526; display: flex; gap: 4px;">
+                <input type="text" class="ide-workspace-input" id="ide-explorer-filter-input" placeholder="Filter files..." style="width: 100%; box-sizing: border-box;" />
             </div>
         `;
-        container.appendChild(switcher);
+        container.appendChild(headerContainer);
         
-        // Wire switcher open button
-        const openBtn = switcher.querySelector('#ide-workspace-open-btn');
-        const pathInput = switcher.querySelector('#ide-workspace-path-input');
+        const openBtn = headerContainer.querySelector('#ide-workspace-open-btn');
+        const pathInput = headerContainer.querySelector('#ide-workspace-path-input');
+        const filterInput = headerContainer.querySelector('#ide-explorer-filter-input');
         
         const triggerOpenFolder = async () => {
             const newPath = pathInput.value.trim();
             if (!newPath) return;
-            
-            try {
-                const res = await fetch(`${API_BASE}/api/ide/workspace`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: newPath })
-                });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    _workspaceRoot = data.root;
-                    uiModule.showToast('Workspace loaded successfully');
-                    
-                    // Re-render
-                    _renderExplorer(container);
-                } else {
-                    const err = await res.json();
-                    uiModule.showError(`Failed to load folder: ${err.detail || 'Folder does not exist'}`);
-                }
-            } catch (e) {
-                uiModule.showError(`Error: ${e.message}`);
-            }
+            await _changeWorkspaceFolder(newPath);
         };
         
-        openBtn.onclick = (e) => { e.stopPropagation(); triggerOpenFolder(); };
-        pathInput.onkeydown = (e) => {
-            if (e.key === 'Enter') {
-                e.stopPropagation();
-                triggerOpenFolder();
-            }
-        };
-
-        // Add root node
-        const rootNode = document.createElement('div');
-        rootNode.style.fontWeight = 'bold';
-        rootNode.style.margin = '10px 0 6px 0';
-        rootNode.style.fontSize = '12px';
-        // Build the root label with DOM APIs so an attacker-controlled
-        // workspace path can't inject HTML here.
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 6px;';
-        const ico = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        ico.setAttribute('width', '14');
-        ico.setAttribute('height', '14');
-        ico.setAttribute('viewBox', '0 0 24 24');
-        ico.setAttribute('fill', 'none');
-        ico.setAttribute('stroke', '#007acc');
-        ico.setAttribute('stroke-width', '2');
-        ico.innerHTML = '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/>';
-        const label = document.createElement('span');
-        // Use the basename of the workspace path; fall back to the full
-        // path when the path is just "/" (which would otherwise yield "")
-        // and finally to a generic "Workspace" when no path is set.
-        const wsName = (_workspaceRoot || '').split('/').filter(Boolean).pop() || _workspaceRoot || 'Workspace';
-        label.textContent = wsName;
-        label.title = _workspaceRoot || '';
-        row.appendChild(ico);
-        row.appendChild(label);
-        rootNode.appendChild(row);
-        container.appendChild(rootNode);
-
+        openBtn.onclick = triggerOpenFolder;
+        pathInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') triggerOpenFolder();
+        });
+        
+        filterInput.value = _explorerFilterText || '';
+        filterInput.addEventListener('input', () => {
+            _explorerFilterText = filterInput.value.toLowerCase();
+            _applyExplorerFilter();
+        });
+        
+        // 2. Tree Container for Files/Folders
         const treeContainer = document.createElement('div');
-        treeContainer.className = 'ide-file-list';
+        treeContainer.className = 'ide-tree-container';
+        treeContainer.style.cssText = 'flex: 1; overflow-y: auto; padding: 4px 0;';
         container.appendChild(treeContainer);
-
-        _buildFileTreeNodes(rootFiles, treeContainer, 0);
-
-    } catch (e) {
-        container.innerHTML = `<div style="font-size:11px;color:var(--color-error);padding:8px;">Error loading workspace: ${_escHtml(e.message)}</div>`;
-    }
-}
-
-async function _fetchDirFiles(relPath) {
-    const res = await fetch(`${API_BASE}/api/ide/files?dir_path=${encodeURIComponent(relPath)}`);
-    if (!res.ok) {
-        throw new Error('Failed to fetch file listing');
-    }
-    return await res.json();
-}
-
-function _buildFileTreeNodes(files, parentContainer, indentLevel) {
-    files.forEach(file => {
-        const row = document.createElement('div');
-        row.className = `ide-tree-node ${file.is_dir ? 'folder-node' : 'file-node'}`;
-        if (_openTabs[_activeTabIdx] && _openTabs[_activeTabIdx].path === file.path) {
-            row.classList.add('active');
-        }
-
-        // Indent guides
-        for (let i = 0; i < indentLevel; i++) {
-            const ind = document.createElement('span');
-            ind.className = 'ide-tree-indent';
-            row.appendChild(ind);
-        }
-
-        // Arrow / expand chevron
-        const arrow = document.createElement('span');
-        arrow.className = 'ide-tree-arrow' + (file.is_dir && _expandedDirs.has(file.path) ? ' expanded' : '');
-        arrow.textContent = '▶';
-        if (!file.is_dir) arrow.style.visibility = 'hidden';
-        row.appendChild(arrow);
-
-        // Icon (returned as innerHTML SVG string from _getFileIcon)
-        const iconWrap = document.createElement('span');
-        iconWrap.className = 'ide-tree-icon';
-        iconWrap.innerHTML = _getFileIcon(file.name, file.is_dir, _expandedDirs.has(file.path));
-        row.appendChild(iconWrap);
-
-        // Filename (textContent so a hostile filename can't inject markup)
-        const nameEl = document.createElement('span');
-        nameEl.className = 'grow';
-        nameEl.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-        nameEl.textContent = file.name;
-        nameEl.title = file.path;
-        row.appendChild(nameEl);
-
-        parentContainer.appendChild(row);
-
-        // Subfolders container
-        let subContainer = null;
-        const isExpanded = _expandedDirs.has(file.path);
-        if (file.is_dir && isExpanded) {
-            subContainer = document.createElement('div');
-            parentContainer.appendChild(subContainer);
-            _loadSubfolderFiles(file.rel_path, subContainer, indentLevel + 1);
-        }
-
-        // Handle Clicks
-        row.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (file.is_dir) {
-                if (_expandedDirs.has(file.path)) {
-                    _expandedDirs.delete(file.path);
-                    const arrowEl = row.querySelector('.ide-tree-arrow');
-                    if (arrowEl) arrowEl.classList.remove('expanded');
-                    if (subContainer) subContainer.remove();
-                } else {
-                    _expandedDirs.add(file.path);
-                    const arrowEl = row.querySelector('.ide-tree-arrow');
-                    if (arrowEl) arrowEl.classList.add('expanded');
-                    subContainer = document.createElement('div');
-                    row.after(subContainer);
-                    _loadSubfolderFiles(file.rel_path, subContainer, indentLevel + 1);
+        
+        async function buildTree(dirPath, indentLevel, parentEl) {
+            try {
+                const files = await _fetchDirFiles(dirPath);
+                for (const file of files) {
+                    const isExpanded = _expandedDirs.has(file.path);
+                    
+                    const node = document.createElement('div');
+                    node.className = 'ide-tree-node';
+                    node.dataset.path = file.path;
+                    node.dataset.relPath = file.rel_path;
+                    node.dataset.isDir = file.is_dir;
+                    
+                    // Add indentation
+                    for (let i = 0; i < indentLevel; i++) {
+                        const indent = document.createElement('span');
+                        indent.className = 'ide-tree-indent';
+                        node.appendChild(indent);
+                    }
+                    
+                    // Add expand/collapse arrow for directories
+                    const arrow = document.createElement('span');
+                    arrow.className = 'ide-tree-arrow';
+                    if (file.is_dir) {
+                        arrow.innerHTML = '▶';
+                        if (isExpanded) {
+                            arrow.classList.add('expanded');
+                        }
+                    } else {
+                        arrow.style.opacity = '0'; // align files with directories
+                        arrow.innerHTML = '•';
+                    }
+                    node.appendChild(arrow);
+                    
+                    // Add custom icon
+                    const icon = document.createElement('span');
+                    icon.className = 'ide-tree-icon';
+                    icon.innerHTML = _getFileIcon(file.name, file.is_dir, isExpanded);
+                    node.appendChild(icon);
+                    
+                    // Add name label
+                    const label = document.createElement('span');
+                    label.className = 'ide-tree-label';
+                    label.textContent = file.name;
+                    node.appendChild(label);
+                    
+                    // Active highlighting
+                    if (_activeTabIdx >= 0 && _openTabs[_activeTabIdx] && _openTabs[_activeTabIdx].path === file.path) {
+                        node.classList.add('active');
+                    }
+                    
+                    // Click handlers
+                    node.onclick = async (e) => {
+                        e.stopPropagation();
+                        if (file.is_dir) {
+                            if (isExpanded) {
+                                _expandedDirs.delete(file.path);
+                            } else {
+                                _expandedDirs.add(file.path);
+                            }
+                            await refreshExplorer();
+                        } else {
+                            await openFile(file.path, file.name);
+                            document.querySelectorAll('.ide-tree-node').forEach(n => n.classList.remove('active'));
+                            node.classList.add('active');
+                        }
+                    };
+                    
+                    // Context Menu
+                    node.oncontextmenu = (e) => {
+                        _showContextMenu(e, file);
+                    };
+                    
+                    parentEl.appendChild(node);
+                    
+                    // Render children recursively if folder is expanded
+                    if (file.is_dir && isExpanded) {
+                        await buildTree(file.path, indentLevel + 1, parentEl);
+                    }
                 }
-            } else {
-                // Remove active classes
-                document.querySelectorAll('.ide-tree-node.file-node').forEach(node => node.classList.remove('active'));
-                row.classList.add('active');
-                
-                await openFile(file.path, file.name);
+            } catch (err) {
+                const errEl = document.createElement('div');
+                errEl.style.cssText = 'font-size: 10px; color: var(--color-error); padding: 4px 12px; opacity: 0.8;';
+                errEl.textContent = `Error: ${err.message}`;
+                parentEl.appendChild(errEl);
             }
-        });
-
-        // Handle right click Context Menu
-        row.addEventListener('contextmenu', (e) => {
-            _showContextMenu(e, file);
-        });
-    });
-}
-
-async function _loadSubfolderFiles(relPath, subContainer, indentLevel) {
-    subContainer.innerHTML = '<div style="font-size:10px;opacity:0.4;padding:4px 16px;">Loading...</div>';
-    try {
-        const subFiles = await _fetchDirFiles(relPath);
-        subContainer.innerHTML = '';
-        _buildFileTreeNodes(subFiles, subContainer, indentLevel);
+        }
+        
+        await buildTree('', 0, treeContainer);
+        
+        // Re-apply filter if active
+        if (_explorerFilterText) {
+            _applyExplorerFilter();
+        }
+        
     } catch (e) {
-        subContainer.innerHTML = `<div style="font-size:10px;color:var(--color-error);padding:4px 16px;">Error</div>`;
+        container.innerHTML = `<div style="font-size:11px;color:var(--color-error);padding:8px;">Failed to load workspace: ${_escHtml(e.message)}</div>`;
     }
-}
-
-// ──────────────────────────────────────────
-// Core File Reading, Tab & Editor Operations
-// ──────────────────────────────────────────
-export async function openFile(filePath, fileName) {
-    try {
-        // Check if file is already open
-        const existingIdx = _openTabs.findIndex(t => t.path === filePath);
-        if (existingIdx >= 0) {
-            _activeTabIdx = existingIdx;
-            _updateEditorContent();
-            _renderTabStrip();
-            return;
-        }
-
-        // Fetch file content
-        const res = await fetch(`${API_BASE}/api/ide/read_file?path=${encodeURIComponent(filePath)}`);
-        if (!res.ok) {
-            throw new Error('Failed to read file content');
-        }
-        
-        const data = await res.json();
-        
-        _openTabs.push({
-            path: filePath,
-            name: fileName,
-            content: data.content,
-            isDirty: false
-        });
-        
-        _activeTabIdx = _openTabs.length - 1;
-        _updateEditorContent();
-        _renderTabStrip();
-
-    } catch (e) {
-        uiModule.showError(`Error opening file: ${e.message}`);
-    }
-}
-
-function _updateEditorContent() {
-    if (_activeTabIdx < 0 || _activeTabIdx >= _openTabs.length) {
-        return;
-    }
-
-    const tab = _openTabs[_activeTabIdx];
-
-    // Reveal toolbar
-    document.getElementById('ide-editor-toolbar').style.display = 'flex';
-
-    const container = document.getElementById('ide-editor-container');
-    if (container && (container.querySelector('.vscode-welcome') || container.innerHTML.trim() === '' || !_monacoEditor)) {
-        // We need to re-initialize editor!
-        if (_monacoLoaded) {
-            _initMonacoInstance();
-        } else {
-            _initFallbackTextarea();
-        }
-    }
-
-    if (_monacoLoaded && _monacoEditor) {
-        const ext = tab.name.split('.').pop().toLowerCase();
-        let lang = 'javascript';
-        let langLabel = 'JavaScript';
-        if (ext === 'py') { lang = 'python'; langLabel = 'Python'; }
-        else if (ext === 'html' || ext === 'htm') { lang = 'html'; langLabel = 'HTML'; }
-        else if (ext === 'css') { lang = 'css'; langLabel = 'CSS'; }
-        else if (ext === 'json') { lang = 'json'; langLabel = 'JSON'; }
-        else if (ext === 'sh' || ext === 'bash') { lang = 'shell'; langLabel = 'Shell Script'; }
-        else if (ext === 'md' || ext === 'markdown') { lang = 'markdown'; langLabel = 'Markdown'; }
-        else if (ext === 'ts') { lang = 'typescript'; langLabel = 'TypeScript'; }
-        else if (ext === 'yml' || ext === 'yaml') { lang = 'yaml'; langLabel = 'YAML'; }
-        else if (ext === 'xml') { lang = 'xml'; langLabel = 'XML'; }
-        else if (ext === 'sql') { lang = 'sql'; langLabel = 'SQL'; }
-        else if (ext === 'rs') { lang = 'rust'; langLabel = 'Rust'; }
-        else if (ext === 'go') { lang = 'go'; langLabel = 'Go'; }
-        else if (ext === 'java') { lang = 'java'; langLabel = 'Java'; }
-        else if (['txt', 'log', 'env', 'cfg', 'conf', 'ini'].includes(ext)) { lang = 'plaintext'; langLabel = 'Plain Text'; }
-
-        // Update status bar language indicator
-        const statusLang = document.getElementById('status-language');
-        if (statusLang) statusLang.textContent = langLabel;
-
-        const model = _monacoEditor.getModel();
-        monaco.editor.setModelLanguage(model, lang);
-        _monacoEditor.setValue(tab.content);
-
-        // Trigger outline and timeline refresh on tab open.
-        // (The persistent model-content listener is attached once in
-        // _initMonacoInstance so the outline updates as the user types.)
-        _renderOutline();
-        _renderTimeline(tab.path);
-    } else {
-        const textarea = document.getElementById('ide-fallback-editor');
-        if (textarea) {
-            textarea.value = tab.content;
-            _renderOutline();
-            _renderTimeline(tab.path);
-        }
-    }
-}
-
-function _renderTabStrip() {
-    const strip = document.getElementById('ide-tab-strip');
-    if (!strip) return;
-
-    strip.innerHTML = '';
-    _openTabs.forEach((tab, idx) => {
-        const tabEl = document.createElement('div');
-        tabEl.className = `ide-tab ${idx === _activeTabIdx ? 'active' : ''}`;
-        // Build with DOM APIs so a filename containing < or & can't inject
-        // HTML into the tab strip (an XSS vector when an agent / file
-        // service produces a file with a hostile name).
-        const labelSpan = document.createElement('span');
-        labelSpan.textContent = tab.name;
-        if (tab.isDirty) {
-            const dot = document.createElement('span');
-            dot.style.color = 'var(--accent)';
-            dot.textContent = ' ●';
-            labelSpan.appendChild(dot);
-        }
-        const closeSpan = document.createElement('span');
-        closeSpan.className = 'ide-tab-close';
-        closeSpan.dataset.idx = String(idx);
-        closeSpan.textContent = '×';
-        tabEl.appendChild(labelSpan);
-        tabEl.appendChild(closeSpan);
-
-        tabEl.addEventListener('click', () => {
-            _activeTabIdx = idx;
-            _updateEditorContent();
-            _renderTabStrip();
-        });
-
-        tabEl.querySelector('.ide-tab-close').addEventListener('click', (e) => {
-            e.stopPropagation();
-            _closeTab(idx);
-        });
-
-        strip.appendChild(tabEl);
-    });
-}
-
-function _closeTab(idx) {
-    const tab = _openTabs[idx];
-    if (tab.isDirty) {
-        if (!confirm(`Save changes to "${tab.name}" before closing?`)) {
-            // Drop unsaved changes
-        } else {
-            saveCurrentFile();
-        }
-    }
-
-    _openTabs.splice(idx, 1);
-    
-    if (_activeTabIdx === idx) {
-        _activeTabIdx = _openTabs.length - 1;
-    } else if (_activeTabIdx > idx) {
-        _activeTabIdx--;
-    }
-
-    if (_openTabs.length === 0) {
-        _activeTabIdx = -1;
-        // Properly dispose Monaco to prevent memory leaks
-        if (_monacoEditor) {
-            try { _monacoEditor.dispose(); } catch(_) {}
-            _monacoEditor = null;
-        }
-        _renderWelcomePage();
-        _renderTimeline(null);
-    } else {
-        _updateEditorContent();
-    }
-    _renderTabStrip();
 }
 
 function _markTabDirty(isDirty) {
@@ -1256,6 +1122,95 @@ function _markTabDirty(isDirty) {
         }
     }
 }
+
+function _switchTab(idx) {
+    if (idx < 0 || idx >= _openTabs.length) return;
+    _activeTabIdx = idx;
+    _updateEditorContent();
+    _renderTabStrip();
+}
+
+function _closeTab(idx) {
+    if (idx < 0 || idx >= _openTabs.length) return;
+    _openTabs.splice(idx, 1);
+    if (_activeTabIdx >= _openTabs.length) _activeTabIdx = _openTabs.length - 1;
+    if (_openTabs.length === 0) {
+        _activeTabIdx = -1;
+        _renderWelcomePage();
+    } else {
+        _updateEditorContent();
+    }
+    _renderTabStrip();
+}
+
+function _updateEditorContent() {
+    const container = document.getElementById('ide-editor-container');
+    if (!container) return;
+    if (_activeTabIdx < 0 || !_openTabs[_activeTabIdx]) {
+        container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--fg);opacity:0.5;font-size:12px;">Select a file from the explorer to open and edit...</div>';
+        return;
+    }
+    const tab = _openTabs[_activeTabIdx];
+    if (_monacoLoaded && _monacoEditor) {
+        const model = _monacoEditor.getModel();
+        if (model) model.setValue(tab.content);
+    } else {
+        const textarea = document.getElementById('ide-fallback-editor');
+        if (textarea) textarea.value = tab.content;
+    }
+    _updateBreadcrumbs();
+}
+
+function _renderTabStrip() {
+    const strip = document.getElementById('ide-tab-strip');
+    if (!strip) return;
+    if (_openTabs.length === 0) {
+        strip.innerHTML = '';
+        return;
+    }
+    strip.innerHTML = _openTabs.map((t, i) => {
+        const a = i === _activeTabIdx ? 'active' : '';
+        const d = t.isDirty ? '● ' : '';
+        return `<div class="ide-tab ${a}" data-idx="${i}"><span>${d}${_escHtml(t.name)}</span><span class="ide-tab-close" data-idx="${i}">×</span></div>`;
+    }).join('');
+    strip.querySelectorAll('.ide-tab').forEach(el => {
+        el.addEventListener('click', e => {
+            if (e.target.closest('.ide-tab-close')) return;
+            _switchTab(parseInt(el.dataset.idx));
+        });
+    });
+    strip.querySelectorAll('.ide-tab-close').forEach(el => {
+        el.addEventListener('click', e => {
+            e.stopPropagation();
+            _closeTab(parseInt(el.dataset.idx));
+        });
+    });
+}
+
+async function openFile(filePath, displayName) {
+    const existingIdx = _openTabs.findIndex(t => t.path === filePath);
+    if (existingIdx >= 0) {
+        _switchTab(existingIdx);
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/ide/read_file?path=${encodeURIComponent(filePath)}`);
+        if (!res.ok) throw new Error('Failed to read file');
+        const data = await res.json();
+        _openTabs.push({
+            path: filePath,
+            name: displayName || filePath.split('/').pop(),
+            content: data.content || '',
+            isDirty: false
+        });
+        _activeTabIdx = _openTabs.length - 1;
+        _updateEditorContent();
+        _renderTabStrip();
+    } catch (e) {
+        uiModule.showError('Failed to open file: ' + e.message);
+    }
+}
+
 function _createNewTextFile() {
     const untitledId = `untitled-${Date.now()}`;
     _openTabs.push({
@@ -1362,6 +1317,11 @@ function _toggleAutoSave() {
     if (checkEl) {
         checkEl.style.display = _autoSaveEnabled ? 'inline' : 'none';
     }
+    const labelEl = document.getElementById('status-autosave-label');
+    if (labelEl) {
+        labelEl.textContent = `Auto Save: ${_autoSaveEnabled ? 'ON' : 'OFF'}`;
+        labelEl.style.color = _autoSaveEnabled ? '#a8ff60' : '';
+    }
     uiModule.showToast(`Auto Save is now ${_autoSaveEnabled ? 'ON' : 'OFF'}`);
 }
 
@@ -1462,37 +1422,6 @@ export async function saveCurrentFile() {
 }
 
 // Run current script/file inside terminal
-export async function runCurrentFile() {
-    if (_activeTabIdx < 0 || _activeTabIdx >= _openTabs.length) return;
-    
-    const tab = _openTabs[_activeTabIdx];
-    
-    // Auto-save first
-    await saveCurrentFile();
-    
-    // Switch active bottom panel to open terminal
-    const bottomPanel = document.getElementById('ide-bottom-panel');
-    bottomPanel.classList.remove('collapsed');
-    document.getElementById('ide-terminal-toggle').textContent = '▼';
-
-    let runCmd = '';
-    const ext = tab.name.split('.').pop().toLowerCase();
-    
-    if (ext === 'py') {
-        runCmd = `python3 ${tab.path}`;
-    } else if (ext === 'js') {
-        runCmd = `node ${tab.path}`;
-    } else if (ext === 'sh' || ext === 'bash') {
-        runCmd = `bash ${tab.path}`;
-    } else {
-        _printTerminal(`\nCannot run file: unsupported script format (.${ext})\n\n$ `);
-        return;
-    }
-
-    _printTerminal(`\nRunning command: ${runCmd}\n`);
-    _executeTerminalCommand(runCmd);
-}
-
 // ──────────────────────────────────────────
 // Tab 2: Integrated Origin Chat Tab
 // ──────────────────────────────────────────
@@ -2556,11 +2485,12 @@ async function _initIdeModelPicker() {
         }
     };
 
-    // Initial check to populate label with current session model
-    const currentModel = window.sessionModule ? window.sessionModule.getCurrentModel() : null;
-    if (currentModel) {
+    // Initial check to populate label with current model
+    const isCustom = localStorage.getItem('origin-ide-custom-model-selected') === 'true';
+    const activeModel = (isCustom && _ideSessionModel) ? _ideSessionModel : (window.sessionModule ? window.sessionModule.getCurrentModel() : null);
+    if (activeModel) {
         const labelSpan = document.getElementById('ide-chat-active-model');
-        if (labelSpan) labelSpan.textContent = currentModel.split('/').pop().substring(0, 20);
+        if (labelSpan) labelSpan.textContent = activeModel.split('/').pop().substring(0, 20);
     }
 }
 
@@ -2577,8 +2507,8 @@ async function _populateIdePicker(filter = '') {
     const defaultRow = document.createElement('div');
     defaultRow.className = 'model-switch-item';
     
-    const currentModel = window.sessionModule ? window.sessionModule.getCurrentModel() : null;
-    if (!currentModel) {
+    const isCustom = localStorage.getItem('origin-ide-custom-model-selected') === 'true';
+    if (!isCustom) {
         defaultRow.classList.add('selected');
     }
     
@@ -2589,11 +2519,32 @@ async function _populateIdePicker(filter = '') {
         </div>
         <span class="provider-name">System</span>
     `;
-    defaultRow.onclick = () => {
+    defaultRow.onclick = async () => {
+        const mainModel = window.sessionModule ? window.sessionModule.getCurrentModel() : null;
         if (labelSpan) {
-            labelSpan.textContent = 'Origin AI';
+            labelSpan.textContent = mainModel ? mainModel.split('/').pop().substring(0, 20) : 'Origin AI';
         }
         menu.classList.add('hidden');
+        localStorage.setItem('origin-ide-custom-model-selected', 'false');
+
+        // Sync Copilot session with active main session model immediately
+        const sessionId = await _ensureIdeSession();
+        const mainEndpoint = window.sessionModule ? window.sessionModule.getCurrentEndpointUrl() : null;
+        if (sessionId && mainModel) {
+            const fd = new FormData();
+            fd.append('model', mainModel);
+            if (mainEndpoint) fd.append('endpoint_url', mainEndpoint);
+            try {
+                await fetch(`${API_BASE}/api/session/${sessionId}`, {
+                    method: 'PATCH',
+                    credentials: 'same-origin',
+                    body: fd
+                });
+                _ideSessionModel = mainModel;
+            } catch (e) {
+                console.error('Failed to sync Copilot model with main session:', e);
+            }
+        }
     };
     listEl.appendChild(defaultRow);
 
@@ -2617,7 +2568,7 @@ async function _populateIdePicker(filter = '') {
                 const row = document.createElement('div');
                 row.className = 'model-switch-item';
                 
-                const isSelected = currentModel === model;
+                const isSelected = isCustom && _ideSessionModel === model;
                 if (isSelected) {
                     row.classList.add('selected');
                 }
@@ -2638,9 +2589,9 @@ async function _populateIdePicker(filter = '') {
                     }
                     menu.classList.add('hidden');
 
-                    const sessionId = window.sessionModule ? window.sessionModule.getCurrentSessionId() : null;
+                    const sessionId = await _ensureIdeSession();
                     if (!sessionId) {
-                        uiModule.showToast('Please start or select a chat session in the main window first.');
+                        uiModule.showToast('Failed to initialize or locate dedicated IDE Copilot session.');
                         return;
                     }
 
@@ -2656,12 +2607,11 @@ async function _populateIdePicker(filter = '') {
                             body: fd
                         });
                         if (switchRes.ok) {
-                            uiModule.showToast(`Switched active session model to ${model}`);
-                            if (window.sessionModule && typeof window.sessionModule.updateModelPicker === 'function') {
-                                window.sessionModule.updateModelPicker();
-                            }
+                            localStorage.setItem('origin-ide-custom-model-selected', 'true');
+                            _ideSessionModel = model;
+                            uiModule.showToast(`Switched Copilot model to ${model}`);
                         } else {
-                            uiModule.showError('Failed to change session model');
+                            uiModule.showError('Failed to change Copilot model');
                         }
                     } catch(err) {
                         uiModule.showError(`Error changing model: ${err.message}`);
@@ -2843,6 +2793,136 @@ function _initIdeMenuBar() {
     });
 }
 
+// Retrieve, validate, or create the dedicated IDE Workspace Copilot session
+async function _ensureIdeSession() {
+    if (_ideSessionId) {
+        return _ideSessionId;
+    }
+
+    const storedId = localStorage.getItem('origin-ide-session-id');
+    let validatedId = null;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/sessions?include_system=true`, { credentials: 'same-origin' });
+        if (res.ok) {
+            const sessions = await res.json();
+
+            // If storedId is in the list, it's valid
+            if (storedId && sessions.some(s => s.id === storedId)) {
+                validatedId = storedId;
+            } else {
+                // Otherwise find by name
+                const existing = sessions.find(s => s.name === '[IDE] Workspace Copilot');
+                if (existing) {
+                    validatedId = existing.id;
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Error fetching sessions:', e);
+    }
+
+    if (validatedId) {
+        _ideSessionId = validatedId;
+        localStorage.setItem('origin-ide-session-id', _ideSessionId);
+        return _ideSessionId;
+    }
+
+    // Create a new dedicated session matching the active main session's model
+    let currentModel = window.sessionModule ? window.sessionModule.getCurrentModel() : null;
+    let currentEndpointUrl = window.sessionModule ? window.sessionModule.getCurrentEndpointUrl() : null;
+
+    if (!currentModel || currentModel === 'Select model') {
+        try {
+            const mRes = await fetch(`${API_BASE}/api/models`, { credentials: 'same-origin' });
+            if (mRes.ok) {
+                const data = await mRes.json();
+                const items = data.items || (Array.isArray(data) ? data : []);
+                const firstItem = items.find(item => !item.offline && ((item.models || []).length || (item.models_extra || []).length));
+                if (firstItem) {
+                    const allModels = (firstItem.models || []).concat(firstItem.models_extra || []);
+                    currentModel = allModels[0];
+                    currentEndpointUrl = firstItem.url || '';
+                }
+            }
+        } catch (e) {
+            console.error('Error fetching default models for IDE session:', e);
+        }
+    }
+
+    const fd = new FormData();
+    fd.append('name', '[IDE] Workspace Copilot');
+    if (currentEndpointUrl) fd.append('endpoint_url', currentEndpointUrl);
+    if (currentModel) fd.append('model', currentModel);
+    fd.append('skip_validation', 'true');
+
+    try {
+        const res = await fetch(`${API_BASE}/api/session`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: fd
+        });
+        if (res.ok) {
+            const data = await res.json();
+            _ideSessionId = data.id;
+            _ideSessionModel = currentModel;
+            localStorage.setItem('origin-ide-session-id', _ideSessionId);
+            return _ideSessionId;
+        }
+    } catch (e) {
+        console.error('Error creating dedicated IDE session:', e);
+    }
+
+    return null;
+}
+
+// Fetch history for the dedicated session and render it in the Copilot pane
+async function _loadCopilotHistory() {
+    const sessionId = await _ensureIdeSession();
+    if (!sessionId) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/history/${sessionId}`, { credentials: 'same-origin' });
+        if (res.ok) {
+            const data = await res.json();
+            const history = data.history || [];
+            _ideSessionModel = data.model || null;
+
+            // Update active model label
+            const labelSpan = document.getElementById('ide-chat-active-model');
+            if (labelSpan) {
+                const isCustom = localStorage.getItem('origin-ide-custom-model-selected') === 'true';
+                if (isCustom && _ideSessionModel) {
+                    labelSpan.textContent = _ideSessionModel.split('/').pop().substring(0, 20);
+                } else {
+                    const mainModel = window.sessionModule ? window.sessionModule.getCurrentModel() : null;
+                    if (mainModel) {
+                        labelSpan.textContent = mainModel.split('/').pop().substring(0, 20);
+                    } else {
+                        labelSpan.textContent = 'Origin AI';
+                    }
+                }
+            }
+
+            const container = document.getElementById('ide-right-chat-messages');
+            if (container) {
+                container.innerHTML = `
+                    <div class="ide-right-chat-msg assistant">
+                        Hello! I am your Origin AI Copilot. Ask me anything about this project or type instructions to build, refactor, or explain code. I'll stream responses in real-time.
+                    </div>
+                `;
+                history.forEach(msg => {
+                    if (msg.role === 'user' || msg.role === 'assistant') {
+                        _appendCopilotMessage(msg.role, msg.content);
+                    }
+                });
+            }
+        }
+    } catch (e) {
+        console.error('Error loading Copilot history:', e);
+    }
+}
+
 // Copilot Message handlers — streaming SSE via /api/chat_stream
 async function _sendCopilotMessage() {
     const textarea = document.getElementById('ide-right-chat-textarea');
@@ -2850,11 +2930,39 @@ async function _sendCopilotMessage() {
     const text = textarea.value.trim();
     if (!text) return;
 
-    // Get current session from Origin
-    const sessionId = window.sessionModule ? window.sessionModule.getCurrentSessionId() : null;
+    // Retrieve or initialize the dedicated IDE Copilot session
+    const sessionId = await _ensureIdeSession();
     if (!sessionId) {
-        _appendCopilotMessage('assistant', '⚠️ Please open or start a chat session in the main Origin window first. The IDE copilot uses your active session model.');
+        _appendCopilotMessage('assistant', '⚠️ Please open or start a chat session in the main Origin window first to configure the Copilot.');
         return;
+    }
+
+    // If no custom model is selected in the IDE, sync the Copilot session's model with the main window's active model
+    const isCustomModel = localStorage.getItem('origin-ide-custom-model-selected') === 'true';
+    if (!isCustomModel) {
+        const mainModel = window.sessionModule ? window.sessionModule.getCurrentModel() : null;
+        const mainEndpoint = window.sessionModule ? window.sessionModule.getCurrentEndpointUrl() : null;
+        if (mainModel && mainModel !== 'Select model' && mainModel !== _ideSessionModel) {
+            const fd = new FormData();
+            fd.append('model', mainModel);
+            if (mainEndpoint) fd.append('endpoint_url', mainEndpoint);
+            try {
+                await fetch(`${API_BASE}/api/session/${sessionId}`, {
+                    method: 'PATCH',
+                    credentials: 'same-origin',
+                    body: fd
+                });
+                _ideSessionModel = mainModel;
+
+                // Update active model label
+                const labelSpan = document.getElementById('ide-chat-active-model');
+                if (labelSpan) {
+                    labelSpan.textContent = mainModel.split('/').pop().substring(0, 20);
+                }
+            } catch (e) {
+                console.error('Failed to sync Copilot session model with main session:', e);
+            }
+        }
     }
 
     textarea.value = '';
@@ -3230,6 +3338,372 @@ function _ideKeydownHandler(e) {
                 input.select();
             }
         }, 100);
+    }
+
+    // Ctrl+Shift+P (or Cmd+Shift+P) toggles Command Palette
+    if (isCmdOrCtrl && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        _toggleCommandPalette();
+    }
+}
+
+// ──────────────────────────────────────────
+// Codex Tab — Inline AI Code Assistant
+// ──────────────────────────────────────────
+let _codexActive = false;
+
+function _switchToCodex() {
+    const container = document.querySelector('.ide-right-chat-container');
+    if (!container) return;
+    _codexActive = true;
+
+    const existing = container.querySelector('.ide-codex-container');
+    if (existing) {
+        existing.style.display = 'block';
+        container.querySelector('.ide-right-chat-messages').style.display = 'none';
+        container.querySelector('.ide-right-chat-input-area').style.display = 'none';
+        return;
+    }
+
+    const chatMessages = container.querySelector('.ide-right-chat-messages');
+    const chatInputArea = container.querySelector('.ide-right-chat-input-area');
+    if (chatMessages) chatMessages.style.display = 'none';
+    if (chatInputArea) chatInputArea.style.display = 'none';
+
+    const codexDiv = document.createElement('div');
+    codexDiv.className = 'ide-codex-container';
+    codexDiv.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow:hidden;';
+    codexDiv.innerHTML = `
+        <div style="padding:8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--fg);opacity:0.7;">
+            Codex — AI Code Assistant
+            <span style="float:right;font-size:10px;cursor:pointer;opacity:0.5;" id="ide-codex-clear">clear</span>
+        </div>
+        <div id="ide-codex-output" style="flex:1;overflow-y:auto;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;color:var(--fg);"></div>
+        <div style="padding:6px 8px;border-top:1px solid var(--border);">
+            <textarea id="ide-codex-input" rows="3" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--fg);padding:6px;border-radius:4px;font-family:monospace;font-size:12px;resize:vertical;" placeholder="Ask Codex to write or edit code..."></textarea>
+            <div style="display:flex;gap:6px;margin-top:6px;">
+                <button id="ide-codex-ask-btn" style="flex:1;background:var(--accent, #3b82f6);color:#fff;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;">Ask Codex</button>
+                <button id="ide-codex-insert-btn" style="flex:0;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;">Insert</button>
+            </div>
+        </div>
+    `;
+    container.appendChild(codexDiv);
+
+    document.getElementById('ide-codex-clear').onclick = () => {
+        document.getElementById('ide-codex-output').textContent = '';
+    };
+    document.getElementById('ide-codex-ask-btn').onclick = _codexAsk;
+    document.getElementById('ide-codex-insert-btn').onclick = _codexInsert;
+    document.getElementById('ide-codex-input').onkeydown = (e) => {
+        if (e.key === 'Enter' && e.ctrlKey) _codexAsk();
+    };
+}
+
+async function _codexAsk() {
+    const input = document.getElementById('ide-codex-input');
+    const output = document.getElementById('ide-codex-output');
+    if (!input || !output) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    const currentFile = _activeTabIdx >= 0 && _openTabs[_activeTabIdx] ? _openTabs[_activeTabIdx] : null;
+    let prompt = text;
+    if (currentFile) {
+        let content = '';
+        if (_monacoLoaded && _monacoEditor) content = _monacoEditor.getValue();
+        if (content) {
+            prompt = `File: ${currentFile.path}\n\`\`\`\n${content.substring(0, 3000)}\n\`\`\`\n\nRequest: ${text}`;
+        }
+    }
+
+    output.textContent += `\n> ${text}\n---\n`;
+    input.value = '';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ message: prompt, session: await _ensureIdeSession(), mode: 'chat' })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            output.textContent += (data.response || 'No reply') + '\n\n';
+        } else {
+            output.textContent += 'Error contacting AI\n\n';
+        }
+    } catch (e) {
+        output.textContent += `Error: ${e.message}\n\n`;
+    }
+    output.scrollTop = output.scrollHeight;
+}
+
+function _codexInsert() {
+    const output = document.getElementById('ide-codex-output');
+    if (!output || !_monacoEditor) return;
+    const text = output.textContent;
+    const codeMatch = text.match(/```[\w]*\n([\s\S]*?)```/);
+    const code = codeMatch ? codeMatch[1].trim() : '';
+    if (code) {
+        const selection = _monacoEditor.getSelection();
+        if (selection && !selection.isEmpty()) {
+            const range = new monaco.Range(selection.startLineNumber, selection.startColumn, selection.endLineNumber, selection.endColumn);
+            _monacoEditor.executeEdits('codex-insert', [{ range, text: code }]);
+        } else {
+            const pos = _monacoEditor.getPosition();
+            const range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
+            _monacoEditor.executeEdits('codex-insert', [{ range, text: code }]);
+        }
+        uiModule.showToast('Code inserted at cursor');
+    } else {
+        // If no code block found, insert the raw output at cursor
+        if (_monacoEditor) {
+            const pos = _monacoEditor.getPosition();
+            const range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
+            _monacoEditor.executeEdits('codex-insert', [{ range, text: output.textContent }]);
+            uiModule.showToast('Text inserted at cursor');
+        }
+    }
+}
+
+// ──────────────────────────────────────────
+// Breadcrumbs Bar
+// ──────────────────────────────────────────
+function _updateBreadcrumbs() {
+    const bar = document.getElementById('ide-breadcrumbs');
+    if (!bar) return;
+    if (_activeTabIdx < 0 || !_openTabs[_activeTabIdx]) {
+        bar.innerHTML = '';
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'block';
+    const tab = _openTabs[_activeTabIdx];
+    const parts = tab.path.replace(_workspaceRoot, '').split('/').filter(Boolean);
+    bar.innerHTML = parts.map((p, i) => {
+        const isLast = i === parts.length - 1;
+        return `<span style="font-size:11px;${isLast ? 'color:var(--fg);font-weight:600;' : 'color:var(--fg);opacity:0.5;cursor:pointer;'}" ${!isLast ? `data-breadcrumb-path="${parts.slice(0, i + 1).join('/')}"` : ''}>${_escHtml(p)}</span>${!isLast ? '<span style="opacity:0.3;margin:0 4px;">›</span>' : ''}`;
+    }).join('');
+
+    // Click non-last parts to navigate
+    bar.querySelectorAll('[data-breadcrumb-path]').forEach(el => {
+        el.onclick = () => {
+            const relPath = el.dataset.breadcrumbPath;
+            const fullPath = _workspaceRoot + '/' + relPath;
+            const tabIdx = _openTabs.findIndex(t => t.path === fullPath);
+            if (tabIdx >= 0) {
+                _switchTab(tabIdx);
+            }
+        };
+    });
+}
+
+// ──────────────────────────────────────────
+// Format Document
+// ──────────────────────────────────────────
+function _formatDocument() {
+    if (!_monacoEditor) {
+        uiModule.showToast('Editor not loaded');
+        return;
+    }
+    _monacoEditor.getAction('editor.action.formatDocument')?.run()
+        .then(() => uiModule.showToast('Document formatted'))
+        .catch(() => {
+            uiModule.showToast('Formatting not available for this language');
+        });
+}
+
+// ──────────────────────────────────────────
+// Command Palette (Ctrl+Shift+P)
+// ──────────────────────────────────────────
+let _commandPaletteVisible = false;
+
+function _toggleCommandPalette() {
+    let palette = document.getElementById('ide-command-palette');
+    if (palette) {
+        palette.remove();
+        _commandPaletteVisible = false;
+        return;
+    }
+
+    palette = document.createElement('div');
+    palette.id = 'ide-command-palette';
+    palette.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);width:500px;max-height:400px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.5);z-index:10000;display:flex;flex-direction:column;overflow:hidden;';
+    palette.innerHTML = `
+        <div style="padding:8px;border-bottom:1px solid var(--border);">
+            <input id="ide-palette-input" type="text" placeholder="Type a command..." autocomplete="off" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--fg);padding:8px 12px;border-radius:4px;outline:none;font-size:13px;">
+        </div>
+        <div id="ide-palette-results" style="flex:1;overflow-y:auto;max-height:320px;padding:4px;"></div>
+    `;
+    document.body.appendChild(palette);
+
+    const COMMANDS = [
+        { id: 'save', label: 'File: Save File', shortcut: '⌘S', action: saveCurrentFile },
+        { id: 'format', label: 'Format: Format Document', shortcut: '', action: _formatDocument },
+        { id: 'run', label: 'Run: Run Active File', shortcut: '⌘R', action: runCurrentFile },
+        { id: 'toggle-sidebar', label: 'View: Toggle Sidebar', shortcut: '⌘B', action: () => document.getElementById('ide-side-panel')?.classList.toggle('collapsed') },
+        { id: 'toggle-terminal', label: 'View: Toggle Terminal', shortcut: 'Ctrl+`', action: () => { const bp = document.getElementById('ide-bottom-panel'); bp?.classList.toggle('collapsed'); const t = document.getElementById('ide-terminal-toggle'); if (t) t.textContent = bp?.classList.contains('collapsed') ? '▲' : '▼'; } },
+        { id: 'close-editor', label: 'File: Close Editor', shortcut: '⌘W', action: _closeActiveEditor },
+        { id: 'new-file', label: 'File: New Text File', shortcut: '⌥⌘N', action: _createNewTextFile },
+        { id: 'new-folder', label: 'File: New Folder', shortcut: '', action: () => { const f = document.querySelector('.ide-tree-item[data-dir]'); _createNewFileIn(f?.dataset?.dir || ''); } },
+        { id: 'save-as', label: 'File: Save As...', shortcut: '⇧⌘S', action: _saveFileAs },
+        { id: 'search', label: 'View: Search in Files', shortcut: '⇧⌘F', action: () => _switchPanel('search') },
+        { id: 'explorer', label: 'View: Go to Explorer', shortcut: '', action: () => _switchPanel('explorer') },
+        { id: 'palette', label: 'View: Command Palette', shortcut: '⇧⌘P', action: () => {} },
+    ];
+
+    const input = document.getElementById('ide-palette-input');
+    const results = document.getElementById('ide-palette-results');
+
+    function _renderPaletteResults(query) {
+        const q = (query || '').toLowerCase();
+        const filtered = q ? COMMANDS.filter(c => c.label.toLowerCase().includes(q) || c.id.includes(q)) : COMMANDS;
+        results.innerHTML = filtered.map((c, i) => `
+            <div class="ide-palette-item ${i === 0 ? 'selected' : ''}" data-index="${i}" data-id="${c.id}" style="padding:6px 12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;border-radius:4px;margin:1px 0;background:${i === 0 ? 'var(--accent)' : 'transparent'};color:${i === 0 ? '#fff' : 'var(--fg)'};">
+                <span>${_escHtml(c.label)}</span>
+                <span style="font-size:10px;opacity:0.5;">${c.shortcut}</span>
+            </div>
+        `).join('');
+
+        results.querySelectorAll('.ide-palette-item').forEach(el => {
+            el.onclick = () => {
+                const cmd = COMMANDS.find(c => c.id === el.dataset.id);
+                if (cmd) { cmd.action(); palette.remove(); _commandPaletteVisible = false; }
+            };
+            el.onmouseenter = () => results.querySelectorAll('.ide-palette-item').forEach(e => { e.style.background = 'transparent'; e.style.color = 'var(--fg)'; });
+            el.onmouseenter = () => { results.querySelectorAll('.ide-palette-item').forEach(e => { e.style.background = 'transparent'; e.style.color = 'var(--fg)'; }); el.style.background = 'var(--accent)'; el.style.color = '#fff'; };
+        });
+    }
+
+    _renderPaletteResults('');
+    input.focus();
+    input.oninput = () => _renderPaletteResults(input.value);
+    input.onkeydown = (e) => {
+        if (e.key === 'Escape') { palette.remove(); _commandPaletteVisible = false; }
+        if (e.key === 'Enter') {
+            const sel = results.querySelector('.ide-palette-item.selected');
+            if (sel) { const cmd = COMMANDS.find(c => c.id === sel.dataset.id); if (cmd) { cmd.action(); palette.remove(); _commandPaletteVisible = false; } }
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const items = results.querySelectorAll('.ide-palette-item');
+            let idx = Array.from(items).findIndex(el => el.classList.contains('selected'));
+            idx = e.key === 'ArrowDown' ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
+            items.forEach(el => { el.classList.remove('selected'); el.style.background = 'transparent'; el.style.color = 'var(--fg)'; });
+            items[idx].classList.add('selected'); items[idx].style.background = 'var(--accent)'; items[idx].style.color = '#fff';
+        }
+    };
+
+    _commandPaletteVisible = true;
+}
+
+// ──────────────────────────────────────────
+// Terminal: session-based shell persistence
+// ──────────────────────────────────────────
+let _terminalSessionId = null;
+
+async function _ensureTerminalSession() {
+    if (_terminalSessionId) return _terminalSessionId;
+    try {
+        const res = await fetch(`${API_BASE}/api/shell/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (res.ok) { const d = await res.json(); _terminalSessionId = d.session_id; }
+    } catch (e) { /* fall through */ }
+    return _terminalSessionId;
+}
+
+async function _executeTerminalCommandPty(commandString) {
+    _printTerminal(`${commandString}\n`);
+    const sessionId = await _ensureTerminalSession();
+    if (sessionId) {
+        try {
+            const res = await fetch(`${API_BASE}/api/shell/session/${sessionId}/exec`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: commandString })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.stdout) _printTerminal(data.stdout);
+                if (data.stderr) _printTerminal(`\x1b[31m${data.stderr}\x1b[0m\n`);
+                _printTerminal(`\n$ `);
+                return;
+            }
+        } catch (e) { /* fall through to non-session */ }
+    }
+    // Fallback: original single-exec (which already prints the commandString at its start)
+    _executeTerminalCommand(commandString);
+}
+
+// ──────────────────────────────────────────
+// Upgraded Code Runner — supports more langs
+// ──────────────────────────────────────────
+export async function runCurrentFile() {
+    if (_activeTabIdx < 0 || _activeTabIdx >= _openTabs.length) return;
+    const tab = _openTabs[_activeTabIdx];
+    await saveCurrentFile();
+
+    const bottomPanel = document.getElementById('ide-bottom-panel');
+    bottomPanel.classList.remove('collapsed');
+    document.getElementById('ide-terminal-toggle').textContent = '▼';
+
+    let runCmd = '';
+    const ext = tab.name.split('.').pop().toLowerCase();
+    const langMap = {
+        py: 'python3', js: 'node', ts: 'npx ts-node', mjs: 'node',
+        sh: 'bash', bash: 'bash', zsh: 'zsh',
+        go: 'go run', rs: 'cargo script', java: 'java', rb: 'ruby',
+        pl: 'perl', php: 'php', swift: 'swift', kt: 'kotlin -script',
+        scala: 'scala -nc', r: 'Rscript', lua: 'lua',
+        dart: 'dart run', c: null, cpp: null, cs: null,
+    };
+    const runner = langMap[ext];
+    if (runner) {
+        runCmd = `${runner} ${tab.path}`;
+    } else {
+        _printTerminal(`\nCannot run file: unsupported format (.${ext})\nTip: Open a terminal and run it manually.\n\n$ `);
+        return;
+    }
+
+    _printTerminal(`\nRunning: ${runCmd}\n`);
+    _executeTerminalCommand(runCmd);
+}
+
+// ──────────────────────────────────────────
+// Source Control (Git Status) Panel
+// ──────────────────────────────────────────
+async function _renderSourceControl(container) {
+    container.innerHTML = '<div style="font-size:11px;opacity:0.5;padding:8px;">Loading git status...</div>';
+    try {
+        const res = await fetch(`${API_BASE}/api/ide/git_branch`);
+        const branch = res.ok ? (await res.json()).branch : 'unknown';
+
+        let statusHtml = `<div style="padding:8px;font-size:11px;"><span style="opacity:0.6;">Branch:</span> <strong>${_escHtml(branch)}</strong></div>`;
+
+        // Fetch git status via shell
+        const statusRes = await fetch(`${API_BASE}/api/shell/exec`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: 'git -C ' + _workspaceRoot + ' status --short 2>&1 || true', use_pty: false })
+        });
+        if (statusRes.ok) {
+            const data = await statusRes.json();
+            const lines = (data.stdout || '').split('\n').filter(Boolean);
+            if (lines.length > 0) {
+                statusHtml += `<div style="padding:4px 8px;border-top:1px solid var(--border);font-size:11px;font-weight:600;opacity:0.6;">Changes (${lines.length})</div>`;
+                lines.forEach(line => {
+                    const status = line.substring(0, 2).trim();
+                    const file = line.substring(3).trim();
+                    const color = status === 'M' ? '#e8a838' : status === '?' ? '#858585' : '#50fa7b';
+                    const label = status === 'M' ? 'M' : status === '?' ? 'U' : status;
+                    statusHtml += `<div style="padding:2px 8px;font-size:11px;display:flex;gap:6px;"><span style="color:${color};font-weight:600;width:16px;">${_escHtml(label)}</span><span>${_escHtml(file)}</span></div>`;
+                });
+            } else {
+                statusHtml += `<div style="padding:8px;font-size:11px;opacity:0.4;text-align:center;">No changes — clean working tree</div>`;
+            }
+        }
+        container.innerHTML = statusHtml;
+    } catch (e) {
+        container.innerHTML = `<div style="font-size:11px;color:var(--color-error);padding:8px;">Git status failed: ${_escHtml(e.message)}</div>`;
     }
 }
 

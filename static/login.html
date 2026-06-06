@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual">
-<title>Odysseus — Login</title>
+<title>Origin — Login</title>
 <script nonce="{{CSP_NONCE}}">
 (function(){
   // Per-theme bg-effect defaults — mirrors THEME_DEFAULT_* maps in
   // static/js/theme.js so login picks the same default pattern as the
   // main app for users who never explicitly chose one.
   var THEME_DEFAULT_PATTERN = {
-    dark:'none', light:'dots', midnight:'rain', paper:'dots',
+    dark:'constellations', light:'dots', midnight:'rain', paper:'dots',
     cyberpunk:'synapse', retrowave:'embers', forest:'petals',
     ocean:'constellations', terminal:'perlin-flow', organs:'rain',
     ume:'petals', cute:'sparkles'
@@ -20,7 +20,7 @@
   };
   var THEME_DEFAULT_INTENSITY = { midnight:0.5, terminal:0.8, organs:0.65 };
   try {
-    var t = JSON.parse(localStorage.getItem('odysseus-theme'));
+    var t = JSON.parse(localStorage.getItem('origin-theme'));
     var s = document.documentElement.style;
     if (t && t.colors) {
       var c = t.colors;
@@ -85,13 +85,27 @@
   @font-face { font-family: 'Fira Code'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/FiraCode-Regular.woff2') format('woff2'); }
   @font-face { font-family: 'Fira Code'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/FiraCode-SemiBold.woff2') format('woff2'); }
   /* Mirror the main app's :root defaults (static/style.css ~line 18) so an
-     uncustomized theme — or a fresh browser with no `odysseus-theme` in
+     uncustomized theme — or a fresh browser with no `origin-theme` in
      localStorage — renders the login page in the same palette as the rest
      of the app instead of a different greys+offwhite scheme. */
   :root {
     --bg: #282c34; --fg: #9cdef2; --panel: #111; --border: #355a66;
-    --red: #e06c75; --green: #50fa7b;
+    --red: #3b82f6; --green: #50fa7b;
     --bg-effect-intensity: 1;
+    --shadow-color: rgba(0, 0, 0, 0.25);
+    --shadow-sm: 0 2px 8px var(--shadow-color);
+    --shadow-md: 0 4px 16px var(--shadow-color), 0 1px 3px rgba(0, 0, 0, 0.12);
+    --shadow-lg: 0 8px 32px var(--shadow-color), 0 2px 6px rgba(0, 0, 0, 0.1);
+    --shadow-xl: 0 16px 48px var(--shadow-color), 0 4px 12px rgba(0, 0, 0, 0.15);
+    --glow-accent: 0 0 12px color-mix(in srgb, var(--red) 25%, transparent);
+    --glow-accent-strong: 0 0 20px color-mix(in srgb, var(--red) 35%, transparent),
+                           0 0 40px color-mix(in srgb, var(--red) 15%, transparent);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
   }
   /* Background patterns — mirrors static/style.css "Background Patterns"
      block so the theme's chosen bgPattern renders on login too. The
@@ -119,64 +133,213 @@
     padding-top: 15vh;
     transition: padding-top 0.2s ease;
   }
+
+  /* Card — premium glass morphism */
   .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 2rem; width: 360px; max-width: 90vw;
-    /* Sit above the bg-effect canvases (which spawn at z-index:0) so the
-       falling rain / drifting petals / etc. don't streak across the
-       login form. */
-    position: relative; z-index: 1;
+    background: color-mix(in srgb, var(--panel) 85%, transparent);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+    border-radius: var(--radius-xl);
+    padding: 2.5rem;
+    width: 380px;
+    max-width: 92vw;
+    position: relative;
+    z-index: 1;
+    box-shadow:
+      var(--shadow-xl),
+      0 0 0 1px color-mix(in srgb, var(--fg) 4%, transparent),
+      inset 0 1px 0 color-mix(in srgb, var(--fg) 8%, transparent);
+    animation: card-enter 0.6s var(--ease-spring) both;
   }
+
+  @keyframes card-enter {
+    0% {
+      opacity: 0;
+      transform: translateY(30px) scale(0.95);
+      filter: blur(6px);
+    }
+    60% {
+      opacity: 1;
+      filter: blur(0);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+    }
+  }
+
+  /* Logo — animated gradient + glow halo */
   .logo {
-    text-align: center; margin-bottom: 1.5rem;
+    text-align: center;
+    margin-bottom: 2rem;
   }
   .logo span {
     font-family: 'Fira Code', monospace;
-    font-size: 2rem; font-weight: 600;
-    letter-spacing: 0.04em;
-    /* Same gradient as the main app's welcome-screen "Odysseus" title
-       (static/style.css #welcome-screen .welcome-name) so the brand
-       wordmark is consistent across login + first-launch screens. */
-    background: linear-gradient(135deg, var(--brand-color, var(--red)), color-mix(in srgb, var(--brand-color, var(--red)) 60%, var(--fg)));
+    font-size: 2.2rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    background: linear-gradient(
+      135deg,
+      var(--brand-color, var(--red)),
+      color-mix(in srgb, var(--brand-color, var(--red)) 60%, var(--fg)),
+      var(--brand-color, var(--red))
+    );
+    background-size: 200% 200%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    animation: login-gradient-shift 4s ease-in-out infinite;
+    filter: drop-shadow(0 0 24px color-mix(in srgb, var(--brand-color, var(--red)) 25%, transparent));
   }
+
+  @keyframes login-gradient-shift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  /* Boat logo — glow */
+  .logo-boat {
+    width: 1.8rem;
+    height: 1.8rem;
+    margin-right: 0.5rem;
+    vertical-align: -0.2em;
+    color: var(--brand-color, var(--red));
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--red) 40%, transparent));
+    animation: boat-float 3s ease-in-out infinite;
+  }
+
+  @keyframes boat-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+
   .setup-note { color: color-mix(in srgb, var(--fg) 60%, transparent); font-size: 0.8rem; margin-bottom: 1rem; text-align: center; }
-  label { display: block; font-size: 0.85rem; margin-bottom: 0.3rem; color: color-mix(in srgb, var(--fg) 65%, transparent); }
-  input:not(.remember-check) {
-    width: 100%; padding: 0.6rem 0.8rem; margin-bottom: 1rem;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    color: var(--fg); font-size: 0.95rem; font-family: 'Fira Code', monospace;
+  label {
+    display: block;
+    font-size: 0.82rem;
+    margin-bottom: 0.4rem;
+    color: color-mix(in srgb, var(--fg) 55%, transparent);
+    font-weight: 500;
+    letter-spacing: 0.02em;
   }
-  input:focus { outline: none; border-color: var(--red); }
+
+  /* Input fields — premium focus glow */
+  input:not(.remember-check) {
+    width: 100%;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 1.1rem;
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    border-radius: var(--radius-md);
+    color: var(--fg);
+    font-size: 0.95rem;
+    font-family: 'Fira Code', monospace;
+    transition: border-color 0.25s ease,
+                box-shadow 0.25s ease,
+                background 0.25s ease;
+  }
+
+  input:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--red) 70%, var(--border));
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--red) 12%, transparent),
+      var(--glow-accent);
+    background: var(--bg);
+  }
+
+  input:hover:not(:focus) {
+    border-color: color-mix(in srgb, var(--fg) 30%, transparent);
+  }
+
+  /* Submit button — gradient + hover glow */
   button {
     width: 100%;
-    /* Asymmetric vertical padding nudges the label 1px down while keeping
-       the button's total height the same as 0.7rem all-around. */
-    padding: calc(0.7rem + 1px) 0.7rem calc(0.7rem - 1px);
-    border: none; border-radius: 6px;
-    background: var(--red); color: #fff; font-size: 1rem; cursor: pointer;
-    font-weight: 600; font-family: 'Fira Code', monospace;
+    padding: calc(0.75rem + 1px) 0.75rem calc(0.75rem - 1px);
+    border: none;
+    border-radius: var(--radius-md);
+    background: linear-gradient(
+      135deg,
+      var(--red),
+      color-mix(in srgb, var(--red) 75%, #fff)
+    );
+    color: #fff;
+    font-size: 1rem;
+    cursor: pointer;
+    font-weight: 600;
+    font-family: 'Fira Code', monospace;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.15s var(--ease-spring),
+                box-shadow 0.25s ease,
+                background 0.25s ease;
   }
-  button:hover { background: color-mix(in srgb, var(--red) 85%, black); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .error { color: #e55; font-size: 0.85rem; margin-bottom: 0.75rem; display: none; }
-  .toggle { text-align: center; margin-top: calc(1rem + 4px); font-size: 0.85rem; color: color-mix(in srgb, var(--fg) 50%, transparent); }
-  .toggle a { color: var(--red); cursor: pointer; text-decoration: none; }
-  .toggle a:hover { text-decoration: underline; }
-  .pw-wrapper { position: relative; margin-bottom: 1rem; }
+
+  button:hover {
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--red) 85%, black),
+      color-mix(in srgb, var(--red) 65%, #fff)
+    );
+    box-shadow:
+      var(--shadow-md),
+      var(--glow-accent-strong);
+    transform: translateY(-1px) scale(1.01);
+  }
+
+  button:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: var(--shadow-xs);
+  }
+
+  button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .error {
+    color: #e55;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+    display: none;
+    padding: 8px 12px;
+    background: color-mix(in srgb, #e55 8%, transparent);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid #e55;
+  }
+
+  .toggle {
+    text-align: center;
+    margin-top: calc(1rem + 4px);
+    font-size: 0.85rem;
+    color: color-mix(in srgb, var(--fg) 50%, transparent);
+  }
+  .toggle a {
+    color: var(--red);
+    cursor: pointer;
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.15s, text-shadow 0.15s;
+  }
+  .toggle a:hover {
+    text-decoration: underline;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--red) 30%, transparent);
+  }
+
+  .pw-wrapper { position: relative; margin-bottom: 1.1rem; }
   .pw-wrapper input:not(.remember-check) { padding-right: 2.5rem; margin-bottom: 0; }
   .pw-toggle {
     position: absolute; right: 8px; top: 50%;
-    /* +1px on the centering offset nudges the eye icon down 1px so it
-       lines up visually with the input text baseline. */
     transform: translateY(calc(-50% + 1px));
     background: none; border: none; padding: 4px; cursor: pointer;
     color: color-mix(in srgb, var(--fg) 40%, transparent); width: auto;
     display: flex; align-items: center; justify-content: center;
+    transition: color 0.15s, transform 0.15s;
+    border-radius: var(--radius-sm);
   }
-  .pw-toggle:hover { color: var(--fg); background: none; }
+  .pw-toggle:hover {
+    color: var(--fg);
+    background: color-mix(in srgb, var(--fg) 8%, transparent);
+    transform: translateY(calc(-50% + 1px)) scale(1.1);
+  }
   .pw-toggle svg { display: block; }
   .remember-toggle {
     position: absolute !important; right: 13px; top: 50%; transform: translateY(-50%);
@@ -191,25 +354,25 @@
     border-radius: 50%;
     border: 2px solid color-mix(in srgb, var(--fg) 25%, transparent);
     background: transparent;
-    transition: all 0.15s;
+    transition: all 0.2s var(--ease-spring);
   }
   .remember-toggle .remember-check:checked + .remember-dot {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--fg) 40%, transparent);
+    border-color: var(--red);
+    background: var(--red);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--red) 40%, transparent);
   }
   .remember-toggle:hover .remember-dot {
     border-color: color-mix(in srgb, var(--fg) 40%, transparent);
+    transform: scale(1.15);
   }
-  .logo-boat { width: 1.6rem; height: 1.6rem; margin-right: 0.4rem; vertical-align: -0.15em; color: var(--red); }
   .version-label {
     position: fixed; bottom: 12px; right: 16px;
-    font-size: 0.7rem; opacity: 0.25;
+    font-size: 0.7rem; opacity: 0.2;
     font-family: 'Fira Code', monospace;
     pointer-events: none; user-select: none;
   }
   /* Whirlpool-style spinner shown in the submit button while login /
-     account-creation work is in flight — replaces the previous "Loading…"
-     text. Two-color ring (muted base + accent arc) rotates continuously. */
+     account-creation work is in flight */
   .login-spinner {
     display: inline-block;
     width: 16px; height: 16px;
@@ -220,12 +383,46 @@
     vertical-align: -3px;
   }
   @keyframes login-spin { to { transform: rotate(360deg); } }
+
+  /* Floating ambient particles behind card */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 400px;
+    height: 400px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(
+      circle,
+      color-mix(in srgb, var(--red) 6%, transparent),
+      transparent 70%
+    );
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+    animation: ambient-pulse 5s ease-in-out infinite;
+  }
+
+  @keyframes ambient-pulse {
+    0%, 100% { opacity: 0.4; transform: translate(-50%, -50%) scale(1); }
+    50% { opacity: 0.7; transform: translate(-50%, -50%) scale(1.15); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card { animation: none; }
+    .logo span { animation: none; }
+    .logo-boat { animation: none; }
+    body::before { animation: none; }
+    button:hover { transform: none; }
+  }
 </style>
+
 </head>
 <body>
 <div class="card">
   <div class="logo">
-    <svg class="logo-boat" viewBox="0 0 32 32"><path d="M16 4L16 22L6 22Z" fill="currentColor"/><path d="M16 8L16 22L24 22Z" fill="currentColor" opacity="0.6"/><path d="M4 24Q10 20 16 24Q22 28 28 24" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg><span>Odysseus</span>
+    <svg class="logo-boat" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M16 5 A 11 11 0 0 0 16 27" /><path d="M16 5 A 11 11 0 0 1 16 27" opacity="0.6" /></svg><span>Origin</span>
   </div>
   <p class="setup-note" id="setupNote" style="display:none"></p>
 
@@ -283,7 +480,7 @@
 
   // Prefill last username
   const usernameInput = document.getElementById('username');
-  const savedUser = localStorage.getItem('odysseus-last-user');
+  const savedUser = localStorage.getItem('origin-last-user');
   if (savedUser && usernameInput) {
     usernameInput.value = savedUser;
     document.getElementById('password').focus();
@@ -430,8 +627,8 @@
     const remember = document.getElementById('remember').checked;
     function finishLogin() {
       const _rem = document.getElementById('remember').checked;
-      if (_rem) localStorage.setItem('odysseus-last-user', username);
-      else localStorage.removeItem('odysseus-last-user');
+      if (_rem) localStorage.setItem('origin-last-user', username);
+      else localStorage.removeItem('origin-last-user');
       sessionStorage.removeItem('ody-session-active');
       submitBtn.innerHTML = '<span class="login-spinner" aria-hidden="true"></span>';
       submitBtn.disabled = true;

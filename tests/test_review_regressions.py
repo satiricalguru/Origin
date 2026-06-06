@@ -68,6 +68,7 @@ def _install_model_route_import_stubs(monkeypatch):
     db_mod = types.ModuleType("core.database")
     db_mod.SessionLocal = lambda: _FakeDb([])
     db_mod.ModelEndpoint = _FakeModelEndpoint
+    db_mod.Session = MagicMock
     middleware_mod = types.ModuleType("core.middleware")
     middleware_mod.require_admin = lambda request: None
     multipart_mod = types.ModuleType("python_multipart")
@@ -428,3 +429,130 @@ async def test_webhook_tool_reuses_private_url_validation():
 
     assert result["exit_code"] == 1
     assert "private/internal" in result["error"]
+
+
+def test_list_sessions_excludes_ide_copilot(monkeypatch):
+    import routes.session_routes as session_routes
+    from core.session_manager import SessionManager
+
+    class FakeSession:
+        def __init__(self, id, name, archived=False):
+            self.id = id
+            self.name = name
+            self.archived = archived
+            self.model = "test-model"
+            self.endpoint_url = "http://localhost:8000"
+            self.rag = False
+
+    class FakeRow:
+        def __init__(self, id):
+            self.id = id
+            self.folder = None
+            self.total_input_tokens = 0
+            self.total_output_tokens = 0
+            self.is_important = False
+            self.created_at = None
+            self.updated_at = None
+            self.last_message_at = None
+            self.mode = "chat"
+            self.message_count = 0
+
+    sessions_dict = {
+        "s1": FakeSession("s1", "Normal Session"),
+        "s2": FakeSession("s2", "[IDE] Workspace Copilot"),
+        "s3": FakeSession("s3", "Nobody"),
+    }
+
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.all.return_value = [
+        FakeRow("s1"), FakeRow("s2"), FakeRow("s3")
+    ]
+    fake_db.query.return_value.filter.return_value.distinct.return_value.all.return_value = []
+
+    monkeypatch.setattr(session_routes, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(session_routes, "get_current_user", lambda req: "tester")
+
+    fake_manager = MagicMock(spec=SessionManager)
+    fake_manager.get_sessions_for_user.return_value = sessions_dict
+
+    session_routes.setup_session_routes(fake_manager, {"REQUEST_TIMEOUT": 10})
+
+    list_sessions_endpoint = None
+    for route in session_routes.router.routes:
+        if route.path == "/api/sessions" and "GET" in route.methods:
+            list_sessions_endpoint = route.endpoint
+            break
+
+    assert list_sessions_endpoint is not None, "GET /api/sessions route not found"
+
+    request = SimpleNamespace()
+    result = list_sessions_endpoint(request)
+
+    session_names = [s["name"] for s in result]
+    assert "Normal Session" in session_names
+    assert "[IDE] Workspace Copilot" not in session_names
+    assert "Nobody" not in session_names
+
+
+def test_list_sessions_includes_ide_copilot_when_requested(monkeypatch):
+    import routes.session_routes as session_routes
+    from core.session_manager import SessionManager
+
+    class FakeSession:
+        def __init__(self, id, name, archived=False):
+            self.id = id
+            self.name = name
+            self.archived = archived
+            self.model = "test-model"
+            self.endpoint_url = "http://localhost:8000"
+            self.rag = False
+
+    class FakeRow:
+        def __init__(self, id):
+            self.id = id
+            self.folder = None
+            self.total_input_tokens = 0
+            self.total_output_tokens = 0
+            self.is_important = False
+            self.created_at = None
+            self.updated_at = None
+            self.last_message_at = None
+            self.mode = "chat"
+            self.message_count = 0
+
+    sessions_dict = {
+        "s1": FakeSession("s1", "Normal Session"),
+        "s2": FakeSession("s2", "[IDE] Workspace Copilot"),
+        "s3": FakeSession("s3", "Nobody"),
+    }
+
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.all.return_value = [
+        FakeRow("s1"), FakeRow("s2"), FakeRow("s3")
+    ]
+    fake_db.query.return_value.filter.return_value.distinct.return_value.all.return_value = []
+
+    monkeypatch.setattr(session_routes, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(session_routes, "get_current_user", lambda req: "tester")
+
+    fake_manager = MagicMock(spec=SessionManager)
+    fake_manager.get_sessions_for_user.return_value = sessions_dict
+
+    session_routes.setup_session_routes(fake_manager, {"REQUEST_TIMEOUT": 10})
+
+    list_sessions_endpoint = None
+    for route in session_routes.router.routes:
+        if route.path == "/api/sessions" and "GET" in route.methods:
+            list_sessions_endpoint = route.endpoint
+            break
+
+    assert list_sessions_endpoint is not None, "GET /api/sessions route not found"
+
+    request = SimpleNamespace()
+    result = list_sessions_endpoint(request, include_system=True)
+
+    session_names = [s["name"] for s in result]
+    assert "Normal Session" in session_names
+    assert "[IDE] Workspace Copilot" in session_names
+    assert "Nobody" in session_names
+

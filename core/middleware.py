@@ -3,6 +3,7 @@
 
 import os
 import secrets
+import logging
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,8 +14,10 @@ from starlette.responses import Response
 # routes via HTTP loopback (the agent's tool calls don't carry the
 # admin user's session cookie). Set once at import; tools read the
 # same value from this module. Never persisted or exposed externally.
-INTERNAL_TOOL_TOKEN = os.environ.get("ODYSSEUS_INTERNAL_TOKEN") or secrets.token_hex(32)
-INTERNAL_TOOL_HEADER = "X-Odysseus-Internal-Token"
+INTERNAL_TOOL_TOKEN = os.environ.get("ORIGIN_INTERNAL_TOKEN") or secrets.token_hex(32)
+INTERNAL_TOOL_HEADER = "X-Origin-Internal-Token"
+
+logger = logging.getLogger(__name__)
 
 
 def require_admin(request: Request):
@@ -23,7 +26,7 @@ def require_admin(request: Request):
     the in-process internal-tool token used by loopback agent tools.
     """
     # In-process bypass for tool-layer loopback calls. Two paths:
-    # (a) header-direct (caller set X-Odysseus-Internal-Token), or
+    # (a) header-direct (caller set X-Origin-Internal-Token), or
     # (b) the auth middleware already validated the token and stamped
     #     request.state.current_user = "internal-tool".
     try:
@@ -31,8 +34,8 @@ def require_admin(request: Request):
             return
         if getattr(request.state, "current_user", None) == "internal-tool":
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("require_admin check failed: %s", exc)
 
     auth_mgr = getattr(request.app.state, "auth_manager", None)
     if os.getenv("AUTH_ENABLED", "true").lower() == "false":
@@ -62,6 +65,28 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # HSTS — set whenever the connection is HTTPS, OR whenever the
+        # request is fronted by a trusted proxy that set `X-Forwarded-Proto`
+        # to https. We don't trust this by default for loopback; an
+        # operator can force it on via the FORCE_HSTS env var.
+        is_https = (
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").lower() == "https"
+            or os.environ.get("FORCE_HSTS", "").lower() in ("1", "true", "yes")
+        )
+        if is_https:
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains"
+            )
+        # Lock down powerful browser features the app never legitimately
+        # needs. Trim if a future feature actually requires one of these.
+        response.headers["Permissions-Policy"] = (
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+            "magnetometer=(), microphone=(), payment=(), usb=()"
+        )
+        # Defense in depth: don't leak the referer to any third party.
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
 
         if is_report:
             response.headers["Content-Security-Policy"] = (
@@ -71,30 +96,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "font-src 'self'; "
                 "img-src 'self' data: blob: https:; "
                 "connect-src 'self'; "
+                "object-src 'none'; "
                 "frame-ancestors 'none'"
             )
         elif is_tool_render:
-            # Tool iframe content: skip all framing headers — the iframe's
-            # sandbox="allow-scripts" attribute provides isolation.
-            # Don't overwrite the route's own restrictive CSP either.
             pass
         else:
             response.headers["X-Frame-Options"] = "DENY"
-            # NOTE: `style-src 'unsafe-inline'` is intentionally retained.
-            # `static/index.html` and `static/login.html` ship inline <style>
-            # blocks, and several JS modules build runtime `style=""` attrs.
-            # Migrating to nonce-only requires templating the HTML files +
-            # auditing every JS-set style attribute. Since inline styles
-            # don't execute script, the residual risk is visual-only.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net; "
                 "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "font-src 'self' https://cdn.jsdelivr.net; "
-                "img-src 'self' data: blob:; "
+                "img-src 'self' data: blob: https:; "
                 "media-src 'self' blob:; "
                 "connect-src 'self'; "
                 "frame-src 'self'; "
+                "object-src 'none'; "
                 "frame-ancestors 'none'"
             )
         return response

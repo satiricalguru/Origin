@@ -270,7 +270,7 @@ async def dispatch_reminder(
             from routes.email_routes import _get_email_config
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
-            from datetime import datetime as _dt
+            from datetime import datetime as _dt, timezone as _tz
             # `reminder_email_account_id` lets the user pick WHICH email
             # account to send reminders from (when they have several
             # configured in Integrations). Falls back to the default
@@ -330,11 +330,11 @@ async def dispatch_reminder(
                 msg["To"] = recipient
                 _t = title or 'Note'
                 _t = _t[len('Reminder:'):].strip() if _t.lower().startswith('reminder:') else _t
-                msg["Subject"] = f"Reminder (Odysseus): {_t}"
-                msg["Date"] = _dt.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
-                msg["X-Odysseus-Origin"] = "odysseus-ui"
-                msg["X-Odysseus-Kind"] = "reminder"
-                msg["X-Odysseus-Ref"] = str(note_id)
+                msg["Subject"] = f"Reminder (Origin): {_t}"
+                msg["Date"] = _dt.now(_tz.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+                msg["X-Origin-Origin"] = "origin-ui"
+                msg["X-Origin-Kind"] = "reminder"
+                msg["X-Origin-Ref"] = str(note_id)
                 # Body shape: synthesis (warm sentence) → blank line → bold
                 # title header → note details. The title was previously only
                 # in the subject line, so the email read like a faceless

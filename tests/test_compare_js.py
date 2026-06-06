@@ -163,7 +163,7 @@ def test_wave_frames_is_valid_animation_strip(node_available):
 
 def test_storage_keys_are_namespaced(node_available):
     """The compare module stores votes + an exclusion pool in
-    localStorage. Pin that the keys start with `odysseus-` so they
+    localStorage. Pin that the keys start with `origin-` so they
     can't collide with other apps on the same origin or with a
     different feature of this app."""
     script = textwrap.dedent("""
@@ -174,5 +174,5 @@ def test_storage_keys_are_namespaced(node_available):
         }));
     """)
     out = _run_node(script)
-    assert out["votes"].startswith("odysseus-")
-    assert out["pool"].startswith("odysseus-")
+    assert out["votes"].startswith("origin-")
+    assert out["pool"].startswith("origin-")

@@ -45,8 +45,8 @@ A full hover-to-play tour lives on the landing page at [`docs/index.html`](docs/
 
 
 ---
-## 📸Clips </details>
-
+<details>
+<summary>📹 Clips</summary>
 
 | Chat & Agents | Deep Research |
 |---|---|

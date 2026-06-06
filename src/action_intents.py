@@ -8,7 +8,7 @@ user asks how a feature works.
 from __future__ import annotations
 
 import re
-    from typing import Iterable, Pattern
+from typing import Iterable, Pattern
 
 
 _ACTION_QUESTION = r"\b(?:can|could|would|will)\s+you\s+"
@@ -70,7 +70,7 @@ _TOOL_INTENT_PATTERNS: tuple[Pattern[str], ...] = tuple(
 
 
 def message_needs_tools(text: str, patterns: Iterable[Pattern[str]] = _TOOL_INTENT_PATTERNS) -> bool:
-"""Return True when a plain chat message should be promoted to agent mode."""
-if not text:
-    return False
-return any(pattern.search(text) for pattern in patterns)
+    """Return True when a plain chat message should be promoted to agent mode."""
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in patterns)

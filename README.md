@@ -2,10 +2,8 @@
 
 <br/>
 
-
 <br/><br/>
-
-# Origin
+# Origin ⦰
 
 ### A self-hosted AI workspace — local-first, privacy-first, no trojan.
 

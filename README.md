@@ -45,6 +45,8 @@ A full hover-to-play tour lives on the landing page at [`docs/index.html`](docs/
 
 
 ---
+## 📸Clips </details>
+
 
 | Chat & Agents | Deep Research |
 |---|---|
@@ -53,10 +55,6 @@ A full hover-to-play tour lives on the landing page at [`docs/index.html`](docs/
 | Compare Models | Documents |
 |---|---|
 | ![Compare](docs/compare.gif) | ![Documents](docs/document.gif) |
-
-| Notes & Tasks | |
-|---|---|
-| ![Notes](docs/notes.gif) | |
 
 </details>
 

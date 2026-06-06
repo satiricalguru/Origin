@@ -2,7 +2,6 @@
 
 <br/>
 
-<img src="docs/odysseus.jpg" alt="Origin" width="120" style="border-radius:16px;" />
 
 <br/><br/>
 

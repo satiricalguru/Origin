@@ -36,7 +36,7 @@ Origin is a **self-hosted AI workspace** that puts you back in control. No subsc
 
 A full hover-to-play tour lives on the landing page at [`docs/index.html`](docs/index.html).
 
-<details>
+
 ---
 
 ## 📸Screenshots

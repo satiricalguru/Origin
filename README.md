@@ -1,7 +1,6 @@
 <div align="center">
-<br/>
-  <br/><br/>
-# Origin ⦰
+  <br>
+  <h1>Origin ⦰</h1>
 
 ### A self-hosted AI workspace — local-first, privacy-first, no trojan.
 

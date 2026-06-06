@@ -35758,12 +35758,22 @@ pre {
 #ide-modal .ide-side-panel {
   background-color: #252526 !important;
   border-right: 1px solid #3c3c3c !important;
-  width: 280px !important;
+  width: 280px;
 }
 
 #ide-modal .ide-side-panel.collapsed {
   width: 0 !important;
   border-right: none !important;
+}
+
+#ide-modal .ide-resize-handle {
+  width: 5px !important;
+  background: transparent !important;
+}
+#ide-modal .ide-resize-handle:hover,
+#ide-modal .ide-resize-handle.active {
+  background: #007acc !important;
+  opacity: 0.6 !important;
 }
 
 #ide-modal .ide-panel-header {
@@ -36144,6 +36154,40 @@ pre {
 .ide-right-sidebar.collapsed {
   width: 0;
   border-left: none;
+}
+
+/* IDE Resize Handle */
+.ide-resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s ease;
+}
+.ide-resize-handle:hover,
+.ide-resize-handle.active {
+  background: color-mix(in srgb, var(--accent, var(--red)) 50%, transparent);
+}
+.ide-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  right: -3px;
+  bottom: 0;
+}
+
+.ide-side-panel.resizing,
+.ide-right-sidebar.resizing {
+  transition: none !important;
+}
+
+/* Column resize cursors in IDE */
+.ide-container-inner.dragging {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .ide-right-tabs {

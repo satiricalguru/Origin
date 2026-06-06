@@ -5,6 +5,7 @@
 import * as Modals from './modalManager.js';
 import uiModule from './ui.js';
 import { providerLogo } from './providers.js';
+import Storage from './storage.js';
 
 const API_BASE = window.location.origin;
 
@@ -85,7 +86,8 @@ export async function open() {
     if (!_ideRendered) {
         _renderIDE();
         _ideRendered = true;
-        _printTerminal(`\x1b[1;36mOrigin Integrated Workspace IDE v1.0.0\x1b[0m\nWorkspace Root: ${_workspaceRoot}\nType shell commands in the prompt below to execute.\n\n$ `);
+        const rootMsg = _workspaceRoot ? `Workspace Root: ${_workspaceRoot}` : 'No folder open. Use File → Open Folder to start.';
+        _printTerminal(`\x1b[1;36mOrigin Integrated Workspace IDE v1.0.0\x1b[0m\n${rootMsg}\nType shell commands in the prompt below to execute.\n\n$ `);
     }
     if (_activeTabIdx >= 0) {
         _updateEditorContent();
@@ -133,14 +135,29 @@ function _wireDrag(modal) {
 
 // Initialize Workspace path
 async function _initWorkspace() {
+    // Only restore the previously-used workspace if the user has explicitly
+    // saved one in this browser. Don't auto-load the server's default CWD —
+    // that surprises the user by opening Origin's own folder on first run.
     try {
+        const saved = localStorage.getItem('ide-workspace-autoload');
+        if (!saved) {
+            _workspaceRoot = '';
+            return;
+        }
         const res = await fetch(`${API_BASE}/api/ide/workspace`);
         if (res.ok) {
             const data = await res.json();
-            _workspaceRoot = data.root;
+            // Only adopt the server-side workspace if it matches what we saved
+            // locally — guards against the IDE running with a different CWD
+            // between sessions.
+            if (data.root && data.root === saved) {
+                _workspaceRoot = data.root;
+            } else {
+                _workspaceRoot = '';
+            }
         }
     } catch (e) {
-        _workspaceRoot = 'Workspace';
+        _workspaceRoot = '';
     }
 }
 
@@ -486,6 +503,7 @@ function _renderIDE() {
                         <!-- Dynamic view content -->
                     </div>
                 </div>
+                <div class="ide-resize-handle" data-target="side-panel"></div>
 
                 <!-- 3. Right workspace area (Editor + Terminal) -->
                 <div class="ide-main-area">
@@ -531,11 +549,12 @@ function _renderIDE() {
                         </div>
                     </div>
                 </div>
+                <div class="ide-resize-handle" data-target="right-sidebar"></div>
 
                 <!-- Right Sidebar Panel (Copilot Chat) -->
                 <div class="ide-right-sidebar" id="ide-right-sidebar">
                     <div class="ide-right-tabs">
-                        <span class="ide-right-tab active" data-tab="chat">Chat</span>
+                        <span class="ide-right-tab active" data-tab="chat" id="ide-chat-tab">Chat</span>
                         <span class="ide-right-tab" data-tab="codex" id="ide-codex-tab">Codex</span>
                     </div>
                     <div class="ide-right-chat-container">
@@ -627,7 +646,15 @@ function _renderIDE() {
     // Sidebar panel toggle collapse
     document.getElementById('ide-panel-close-btn').addEventListener('click', () => {
         const sidePanel = document.getElementById('ide-side-panel');
-        sidePanel.classList.toggle('collapsed');
+        const isCollapsed = sidePanel.classList.contains('collapsed');
+        if (isCollapsed) {
+            sidePanel.classList.remove('collapsed');
+            const saved = Storage.get('ide-side-panel-width');
+            if (saved) sidePanel.style.width = saved + 'px';
+        } else {
+            sidePanel.style.width = sidePanel.getBoundingClientRect().width + 'px';
+            sidePanel.classList.add('collapsed');
+        }
         setTimeout(() => {
             if (_monacoEditor) _monacoEditor.layout();
         }, 300);
@@ -691,6 +718,16 @@ function _renderIDE() {
         });
     }
 
+    // Wire Chat tab — switch back from Codex to copilot chat
+    const chatTab = document.getElementById('ide-chat-tab');
+    if (chatTab) {
+        chatTab.addEventListener('click', () => {
+            document.querySelectorAll('.ide-right-tab').forEach(t => t.classList.remove('active'));
+            chatTab.classList.add('active');
+            _switchToChat();
+        });
+    }
+
     // Wire context inject button — inserts current file content into copilot textarea
     const ctxBtn = document.getElementById('ide-ctx-inject-btn');
     if (ctxBtn) {
@@ -733,7 +770,15 @@ function _renderIDE() {
         settingsBtn.onclick = () => {
             const rightSidebar = document.getElementById('ide-right-sidebar');
             if (rightSidebar) {
-                rightSidebar.classList.toggle('collapsed');
+                const isCollapsed = rightSidebar.classList.contains('collapsed');
+                if (isCollapsed) {
+                    rightSidebar.classList.remove('collapsed');
+                    const saved = Storage.get('ide-right-sidebar-width');
+                    if (saved) rightSidebar.style.width = saved + 'px';
+                } else {
+                    rightSidebar.style.width = rightSidebar.getBoundingClientRect().width + 'px';
+                    rightSidebar.classList.add('collapsed');
+                }
                 setTimeout(() => {
                     if (_monacoEditor) _monacoEditor.layout();
                 }, 300);
@@ -779,6 +824,78 @@ function _renderIDE() {
 
     // Switch to initial active panel
     _switchPanel(_activePanel);
+
+    // Setup column resize handles
+    _setupIDEResize();
+}
+
+// ── IDE Column Resize Handles ──
+function _setupIDEResize() {
+    const LEFT_KEY = 'ide-side-panel-width';
+    const RIGHT_KEY = 'ide-right-sidebar-width';
+    const MIN_LEFT = 120;
+    const MAX_LEFT = 600;
+    const MIN_RIGHT = 150;
+    const MAX_RIGHT = 600;
+
+    // Restore saved widths
+    const savedLeft = Storage.get(LEFT_KEY);
+    if (savedLeft) {
+        const panel = document.getElementById('ide-side-panel');
+        if (panel) panel.style.width = parseInt(savedLeft, 10) + 'px';
+    }
+    const savedRight = Storage.get(RIGHT_KEY);
+    if (savedRight) {
+        const panel = document.getElementById('ide-right-sidebar');
+        if (panel) panel.style.width = parseInt(savedRight, 10) + 'px';
+    }
+
+    function makeResizable(handleId, targetId, storageKey, minWidth, maxWidth) {
+        const handle = document.querySelector(`.ide-resize-handle[data-target="${handleId}"]`);
+        const target = document.getElementById(targetId);
+        if (!handle || !target) return;
+
+        let startX, startWidth, isDragging = false;
+
+        function onStart(e) {
+            e.preventDefault();
+            isDragging = true;
+            startX = e.clientX;
+            startWidth = target.getBoundingClientRect().width;
+            target.classList.add('resizing');
+            handle.classList.add('active');
+            document.querySelector('.ide-container-inner').classList.add('dragging');
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onEnd);
+        }
+
+        function onMove(e) {
+            if (!isDragging) return;
+            const delta = e.clientX - startX;
+            const newWidth = Math.min(maxWidth, Math.max(minWidth, startWidth + delta));
+            target.style.width = newWidth + 'px';
+        }
+
+        function onEnd() {
+            isDragging = false;
+            target.classList.remove('resizing');
+            handle.classList.remove('active');
+            document.querySelector('.ide-container-inner').classList.remove('dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onEnd);
+
+            const finalWidth = parseInt(target.style.width, 10);
+            if (finalWidth >= minWidth) {
+                Storage.set(storageKey, String(finalWidth));
+            }
+            if (_monacoEditor) _monacoEditor.layout();
+        }
+
+        handle.addEventListener('mousedown', onStart);
+    }
+
+    makeResizable('side-panel', 'ide-side-panel', LEFT_KEY, MIN_LEFT, MAX_LEFT);
+    makeResizable('right-sidebar', 'ide-right-sidebar', RIGHT_KEY, MIN_RIGHT, MAX_RIGHT);
 }
 
 function _updateIndentLabel(value) {
@@ -961,8 +1078,48 @@ function _applyExplorerFilter() {
 }
 
 async function _renderExplorer(container) {
+    // No folder open yet — render the path input plus a hint instead of
+    // fetching (and accidentally opening) the server's default CWD.
+    if (!_workspaceRoot) {
+        container.innerHTML = '';
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'ide-explorer-header-container';
+        headerContainer.style.cssText = 'display: flex; flex-direction: column; border-bottom: 1px solid var(--border);';
+        headerContainer.innerHTML = `
+            <div class="ide-workspace-switcher" style="border-bottom: 1px solid var(--border);">
+                <label>Workspace Folder</label>
+                <div class="ide-workspace-input-row">
+                    <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" placeholder="Enter absolute directory path..." />
+                    <button class="ide-workspace-btn" id="ide-workspace-open-btn">Open</button>
+                </div>
+            </div>
+        `;
+        container.appendChild(headerContainer);
+        const openBtn = headerContainer.querySelector('#ide-workspace-open-btn');
+        const pathInput = headerContainer.querySelector('#ide-workspace-path-input');
+        if (openBtn && pathInput) {
+            openBtn.onclick = (e) => {
+                e.stopPropagation();
+                const v = pathInput.value.trim();
+                if (v) _changeWorkspaceFolder(v);
+            };
+            pathInput.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.stopPropagation();
+                    const v = pathInput.value.trim();
+                    if (v) _changeWorkspaceFolder(v);
+                }
+            };
+        }
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size: 11px; opacity: 0.55; padding: 16px 12px; line-height: 1.5;';
+        hint.innerHTML = 'No folder open.<br><span style="opacity:0.7;">Enter a path above, pick one from <b>File → Open Recent</b>, or click <b>Open Folder</b> on the welcome page.</span>';
+        container.appendChild(hint);
+        return;
+    }
+
     container.innerHTML = '<div style="font-size:11px;opacity:0.5;padding:8px;">Loading workspace root...</div>';
-    
+
     try {
         container.innerHTML = '';
         
@@ -1247,8 +1404,13 @@ async function _changeWorkspaceFolder(newPath) {
         if (res.ok) {
             const data = await res.json();
             _workspaceRoot = data.root;
+            // Remember the user's choice so the IDE re-opens this folder next
+            // time. The autoload key is what _initWorkspace() checks; we use
+            // a separate flag (rather than checking recents) so the welcome
+            // page still appears on the first run.
+            try { localStorage.setItem('ide-workspace-autoload', data.root); } catch(e) {}
             uiModule.showToast('Workspace loaded successfully');
-            
+
             // Save to recents in localStorage
             let recents = [];
             try {
@@ -1333,6 +1495,9 @@ function _closeActiveEditor() {
 
 async function _closeFolder() {
     _workspaceRoot = '';
+    // Forget the autoload preference so the welcome page shows next time
+    // instead of silently re-opening the folder we just closed.
+    try { localStorage.removeItem('ide-workspace-autoload'); } catch(e) {}
     _openTabs = [];
     _activeTabIdx = -1;
     if (_monacoEditor) {
@@ -2049,8 +2214,8 @@ function _renderWelcomePage() {
     container.innerHTML = `
         <div class="vscode-welcome">
             <div class="welcome-title-row">
-                <h1 class="welcome-title">Visual Studio Code</h1>
-                <p class="welcome-subtitle">Editing evolved</p>
+                <h1 class="welcome-title">Origin Workspace</h1>
+                <p class="welcome-subtitle">Access without barriers</p>
             </div>
             <div class="welcome-grid">
                 <div class="welcome-column">
@@ -2784,7 +2949,8 @@ function _initIdeMenuBar() {
             // '$ ' was confusing because it implied a previous command had
             // finished, when in reality we'd just erased the prompt.
             termOutput.innerHTML = '';
-            _printTerminal(`\x1b[1;36mOrigin Integrated Workspace IDE v1.0.0\x1b[0m\nWorkspace Root: ${_workspaceRoot}\nType shell commands in the prompt below to execute.\n\n$ `);
+            const rootMsg = _workspaceRoot ? `Workspace Root: ${_workspaceRoot}` : 'No folder open. Use File → Open Folder to start.';
+            _printTerminal(`\x1b[1;36mOrigin Integrated Workspace IDE v1.0.0\x1b[0m\n${rootMsg}\nType shell commands in the prompt below to execute.\n\n$ `);
         }
     });
 
@@ -3359,7 +3525,7 @@ function _switchToCodex() {
 
     const existing = container.querySelector('.ide-codex-container');
     if (existing) {
-        existing.style.display = 'block';
+        existing.style.display = 'flex';
         container.querySelector('.ide-right-chat-messages').style.display = 'none';
         container.querySelector('.ide-right-chat-input-area').style.display = 'none';
         return;
@@ -3374,9 +3540,20 @@ function _switchToCodex() {
     codexDiv.className = 'ide-codex-container';
     codexDiv.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow:hidden;';
     codexDiv.innerHTML = `
-        <div style="padding:8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--fg);opacity:0.7;">
-            Codex — AI Code Assistant
-            <span style="float:right;font-size:10px;cursor:pointer;opacity:0.5;" id="ide-codex-clear">clear</span>
+        <div style="padding:8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <span style="font-weight:600;opacity:0.85;">Codex</span>
+            <span id="ide-codex-status" style="display:inline-flex;align-items:center;gap:4px;opacity:0.7;">
+                <span id="ide-codex-status-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#888;"></span>
+                <span id="ide-codex-status-text">Checking…</span>
+            </span>
+            <span style="margin-left:auto;display:inline-flex;gap:6px;align-items:center;">
+                <select id="ide-codex-model" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:3px;font-size:10px;padding:2px 4px;max-width:140px;" disabled>
+                    <option>—</option>
+                </select>
+                <button id="ide-codex-connect" style="background:var(--accent,#3b82f6);color:#fff;border:none;border-radius:3px;font-size:10px;padding:3px 8px;cursor:pointer;">Connect ChatGPT</button>
+                <button id="ide-codex-disconnect" style="display:none;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:3px;font-size:10px;padding:3px 6px;cursor:pointer;" title="Disconnect ChatGPT account">Disconnect</button>
+                <span style="font-size:10px;cursor:pointer;opacity:0.5;" id="ide-codex-clear">clear</span>
+            </span>
         </div>
         <div id="ide-codex-output" style="flex:1;overflow-y:auto;padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;color:var(--fg);"></div>
         <div style="padding:6px 8px;border-top:1px solid var(--border);">
@@ -3397,6 +3574,180 @@ function _switchToCodex() {
     document.getElementById('ide-codex-input').onkeydown = (e) => {
         if (e.key === 'Enter' && e.ctrlKey) _codexAsk();
     };
+    document.getElementById('ide-codex-connect').onclick = _codexConnect;
+    document.getElementById('ide-codex-disconnect').onclick = _codexDisconnect;
+    document.getElementById('ide-codex-model').onchange = (e) => {
+        const m = e.target.value;
+        if (m && m !== '—') _codexSelectModel(m);
+    };
+
+    // Kick off async status + model load
+    _codexCheckStatus();
+}
+
+function _switchToChat() {
+    const container = document.querySelector('.ide-right-chat-container');
+    if (!container) return;
+    _codexActive = false;
+
+    const codex = container.querySelector('.ide-codex-container');
+    if (codex) codex.style.display = 'none';
+
+    const chatMessages = container.querySelector('.ide-right-chat-messages');
+    const chatInputArea = container.querySelector('.ide-right-chat-input-area');
+    if (chatMessages) chatMessages.style.display = 'flex';
+    if (chatInputArea) chatInputArea.style.display = 'flex';
+}
+
+// ──────────────────────────────────────────
+// Codex — Account / Model wiring
+// ──────────────────────────────────────────
+
+async function _codexCheckStatus() {
+    const dot = document.getElementById('ide-codex-status-dot');
+    const text = document.getElementById('ide-codex-status-text');
+    const connectBtn = document.getElementById('ide-codex-connect');
+    const disconnectBtn = document.getElementById('ide-codex-disconnect');
+    const modelSel = document.getElementById('ide-codex-model');
+    if (!dot || !text) return;
+
+    text.textContent = 'Checking…';
+    dot.style.background = '#888';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/codex/status`, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+        if (data.connected) {
+            dot.style.background = '#22c55e';
+            text.textContent = data.email ? `Connected · ${data.email}` : 'Connected to ChatGPT';
+            text.title = data.email || '';
+            connectBtn.style.display = 'none';
+            disconnectBtn.style.display = '';
+            _codexLoadModels(data.model);
+        } else {
+            dot.style.background = '#ef4444';
+            text.textContent = 'Not connected';
+            connectBtn.style.display = '';
+            disconnectBtn.style.display = 'none';
+            modelSel.disabled = true;
+            modelSel.innerHTML = '<option>—</option>';
+        }
+    } catch (e) {
+        dot.style.background = '#f59e0b';
+        text.textContent = `Status error: ${e.message}`;
+        connectBtn.style.display = '';
+        disconnectBtn.style.display = 'none';
+    }
+}
+
+async function _codexLoadModels(preferred) {
+    const sel = document.getElementById('ide-codex-model');
+    if (!sel) return;
+    sel.disabled = true;
+    sel.innerHTML = '<option>Loading…</option>';
+    try {
+        const res = await fetch(`${API_BASE}/api/codex/models`, { credentials: 'same-origin' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            sel.innerHTML = `<option>${(err.detail || 'failed').toString().slice(0, 60)}</option>`;
+            return;
+        }
+        const data = await res.json();
+        const models = data.models || [];
+        if (!models.length) {
+            sel.innerHTML = '<option>No codex models</option>';
+            return;
+        }
+        sel.innerHTML = '';
+        for (const m of models) {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.id;
+            if (preferred && m.id === preferred) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        if (!preferred && models[0]) sel.value = models[0].id;
+        sel.disabled = false;
+    } catch (e) {
+        sel.innerHTML = `<option>${e.message}</option>`;
+    }
+}
+
+async function _codexSelectModel(model) {
+    try {
+        await fetch(`${API_BASE}/api/codex/model`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+        });
+        _codexOutputLine(`Model set to ${model}.`);
+    } catch (e) {
+        _codexOutputLine(`Failed to set model: ${e.message}`);
+    }
+}
+
+async function _codexConnect() {
+    const connectBtn = document.getElementById('ide-codex-connect');
+    const text = document.getElementById('ide-codex-status-text');
+    if (connectBtn) {
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Opening…';
+    }
+    try {
+        const startRes = await fetch(`${API_BASE}/api/codex/oauth/start`, {
+            method: 'POST', credentials: 'same-origin',
+        });
+        if (!startRes.ok) {
+            const err = await startRes.json().catch(() => ({}));
+            throw new Error(err.detail || `start failed: ${startRes.status}`);
+        }
+        const start = await startRes.json();
+        const popup = window.open(start.auth_url, 'origin-codex-oauth', 'width=520,height=720');
+        if (!popup) {
+            throw new Error('Popup blocked — allow popups for this site');
+        }
+        if (text) text.textContent = 'Sign in in the popup…';
+        const waitRes = await fetch(`${API_BASE}/api/codex/oauth/wait`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ state: start.state }),
+        });
+        const waitData = await waitRes.json().catch(() => ({}));
+        if (!waitRes.ok) {
+            throw new Error(waitData.detail || `oauth failed: ${waitRes.status}`);
+        }
+        try { popup.close(); } catch (_) { /* ignore */ }
+        _codexCheckStatus();
+    } catch (e) {
+        if (text) text.textContent = `Connect failed: ${e.message}`;
+        _codexOutputLine(`Connect failed: ${e.message}`);
+    } finally {
+        if (connectBtn) {
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'Connect ChatGPT';
+        }
+    }
+}
+
+async function _codexDisconnect() {
+    const text = document.getElementById('ide-codex-status-text');
+    try {
+        await fetch(`${API_BASE}/api/codex/oauth/disconnect`, {
+            method: 'POST', credentials: 'same-origin',
+        });
+    } catch (e) {
+        if (text) text.textContent = `Disconnect failed: ${e.message}`;
+    }
+    _codexCheckStatus();
+}
+
+function _codexOutputLine(line) {
+    const output = document.getElementById('ide-codex-output');
+    if (!output) return;
+    output.textContent += `\n${line}\n`;
+    output.scrollTop = output.scrollHeight;
 }
 
 async function _codexAsk() {
@@ -3405,6 +3756,21 @@ async function _codexAsk() {
     if (!input || !output) return;
     const text = input.value.trim();
     if (!text) return;
+
+    // Require an active ChatGPT connection
+    let status = null;
+    try {
+        const s = await fetch(`${API_BASE}/api/codex/status`, { credentials: 'same-origin' });
+        if (s.ok) status = await s.json();
+    } catch (_) { /* fall through */ }
+    if (!status || !status.connected) {
+        output.textContent += `\n> ${text}\n---\n[Codex] Not connected to ChatGPT. Click “Connect ChatGPT” in the header to sign in.\n\n`;
+        input.value = '';
+        output.scrollTop = output.scrollHeight;
+        return;
+    }
+    const sel = document.getElementById('ide-codex-model');
+    const model = sel && !sel.disabled ? sel.value : '';
 
     const currentFile = _activeTabIdx >= 0 && _openTabs[_activeTabIdx] ? _openTabs[_activeTabIdx] : null;
     let prompt = text;
@@ -3420,17 +3786,18 @@ async function _codexAsk() {
     input.value = '';
 
     try {
-        const res = await fetch(`${API_BASE}/api/chat`, {
+        const res = await fetch(`${API_BASE}/api/codex/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ message: prompt, session: await _ensureIdeSession(), mode: 'chat' })
+            body: JSON.stringify({ message: prompt, model }),
         });
         if (res.ok) {
             const data = await res.json();
             output.textContent += (data.response || 'No reply') + '\n\n';
         } else {
-            output.textContent += 'Error contacting AI\n\n';
+            const err = await res.json().catch(() => ({}));
+            output.textContent += `[Codex] ${err.detail || `error ${res.status}`}\n\n`;
         }
     } catch (e) {
         output.textContent += `Error: ${e.message}\n\n`;

@@ -701,6 +701,10 @@ app.include_router(setup_vault_routes())
 from routes.contacts_routes import setup_contacts_routes
 app.include_router(setup_contacts_routes())
 
+# ChatGPT Codex (OAuth + model picker for the IDE Codex panel)
+from routes.codex_routes import setup_codex_routes
+app.include_router(setup_codex_routes(api_key_manager))
+
 # ========= ROUTES (kept in app.py) =========
 
 def _serve_html_with_nonce(request: Request, file_path: str) -> HTMLResponse:

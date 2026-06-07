@@ -163,6 +163,7 @@ The project would not exist without them — credit where credit is due:
 - **gpt-oss-120b** — the legend that kicked this project off.
 - **Qwen3-235B**
 - **DeepSeek V3.1 · DeepSeek V4 Pro · DeepSeek V4 Flash**
+- **Antigravity**
 - **Claude** (Anthropic)
 - **Codex** (OpenAI)
 - Friends, for helping me debug.

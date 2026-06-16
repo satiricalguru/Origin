@@ -52,13 +52,22 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          # Re-read machine PATH so choco-installed makensis is available
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + $env:PATH
+          # Re-read machine and user PATH so choco-installed makensis is available
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User") + ";" + $env:PATH
 
           $repoRoot = (Get-Location).Path
           Write-Host "Repo root: $repoRoot"
 
-          $makensis = Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          $makensis = $null
+          foreach ($p in @(
+            "makensis",
+            "C:\Program Files (x86)\NSIS\makensis.exe",
+            "C:\Program Files\NSIS\makensis.exe",
+            "C:\ProgramData\chocolatey\bin\makensis.exe"
+          )) {
+            $cmd = Get-Command $p -ErrorAction SilentlyContinue
+            if ($cmd) { $makensis = $cmd.Source; break }
+          }
           if (-not $makensis) { Write-Error "makensis not found"; exit 1 }
           Write-Host "makensis: $makensis"
 

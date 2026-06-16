@@ -1,20 +1,28 @@
 ; ============================================================
 ;  Origin — Windows NSIS Installer Script
-;  Produces: dist/Origin-Setup.exe
+;  Produces: dist\Origin-Setup.exe
 ;
-;  Build with:
-;    makensis installer\windows\origin.nsi
-;  (from the repo root, after installing NSIS on Windows)
+;  Called from repo root by the GitHub Actions workflow:
+;    makensis /DREPO_ROOT="." installer\windows\origin.nsi
+;
+;  REPO_ROOT is passed in by the workflow so all paths are
+;  absolute on the runner (no fragile relative ..\ navigation).
 ; ============================================================
 
-!define APP_NAME     "Origin"
-!define APP_VERSION  "1.0.0"
+; REPO_ROOT must be passed via /D on the command line.
+; Default to current dir so local builds still work if run from root.
+!ifndef REPO_ROOT
+  !define REPO_ROOT "."
+!endif
+
+!define APP_NAME      "Origin"
+!define APP_VERSION   "1.0.0"
 !define APP_PUBLISHER "Origin"
-!define APP_URL      "https://github.com/satiricalguru/Origin"
+!define APP_URL       "https://github.com/satiricalguru/Origin"
 !define INSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 
-; Output file
-OutFile "..\..\dist\Origin-Setup.exe"
+; Output file — written to dist\ inside the repo root
+OutFile "${REPO_ROOT}\dist\Origin-Setup.exe"
 
 ; Compression
 SetCompressor /SOLID lzma
@@ -33,16 +41,14 @@ RequestExecutionLevel admin
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "${INSTALL_REG_KEY}" "InstallLocation"
 
-; --- MUI Pages ---
+; --- MUI Pages (no custom icon — uses NSIS default) ---
 !define MUI_ABORTWARNING
-!define MUI_ICON   "origin.ico"
-!define MUI_UNICON "origin.ico"
 
 !define MUI_WELCOMEPAGE_TITLE  "Welcome to Origin ${APP_VERSION}"
 !define MUI_WELCOMEPAGE_TEXT   "Origin is a local AI assistant that runs entirely on your machine — no cloud required.$\r$\n$\r$\nThis installer will copy the Origin files to your computer. Python 3.11+ must be installed separately (see requirements).$\r$\n$\r$\nClick Next to continue."
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE  "..\..\LICENSE"
+!insertmacro MUI_PAGE_LICENSE  "${REPO_ROOT}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN
@@ -65,11 +71,10 @@ Section "Origin (required)" SecMain
 
     SetOutPath "$INSTDIR"
 
-    ; Copy everything except venv/, data/, .git/, __pycache__/, dist/, logs/
-    ; GitHub Actions will zip the clean repo so we can just use:
-    File /r /x "venv" /x "data" /x ".git" /x "__pycache__" /x "dist" /x "logs" /x ".pytest_cache" "..\..\*"
+    ; Copy repo files (excludes runtime/generated dirs)
+    File /r /x "venv" /x "data" /x ".git" /x "__pycache__" /x "dist" /x "logs" /x ".pytest_cache" "${REPO_ROOT}\*"
 
-    ; Create logs and data dirs so the app can write to them
+    ; Create runtime dirs so the app can write to them on first launch
     CreateDirectory "$INSTDIR\logs"
     CreateDirectory "$INSTDIR\data"
 
@@ -91,12 +96,11 @@ Section "Origin (required)" SecMain
     IntFmt $0 "0x%08X" $0
     WriteRegDWORD HKLM "${INSTALL_REG_KEY}" "EstimatedSize" "$0"
 
-    ; Start Menu shortcut
+    ; Start Menu shortcuts
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" \
         "powershell.exe" \
-        "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTDIR\launch-windows.ps1`"" \
-        "$INSTDIR\installer\windows\origin.ico" 0
+        "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTDIR\launch-windows.ps1`""
 
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" \
         "$INSTDIR\Uninstall.exe"
@@ -104,8 +108,7 @@ Section "Origin (required)" SecMain
     ; Desktop shortcut
     CreateShortcut "$DESKTOP\${APP_NAME}.lnk" \
         "powershell.exe" \
-        "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTDIR\launch-windows.ps1`"" \
-        "$INSTDIR\installer\windows\origin.ico" 0
+        "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTDIR\launch-windows.ps1`""
 
 SectionEnd
 
@@ -113,7 +116,7 @@ SectionEnd
 ;  Launch function (called from Finish page)
 ; ============================================================
 Function LaunchApp
-    ExecShell "open" "powershell.exe" \
+    ExecShell "" "powershell.exe" \
         "-ExecutionPolicy Bypass -File `"$INSTDIR\launch-windows.ps1`""
 FunctionEnd
 
@@ -127,8 +130,7 @@ Section "Uninstall"
     RMDir  "$SMPROGRAMS\${APP_NAME}"
     Delete "$DESKTOP\${APP_NAME}.lnk"
 
-    ; Remove installed files (but preserve user data/)
-    RMDir /r "$INSTDIR\app.py"
+    ; Remove installed files (preserve user data/)
     RMDir /r "$INSTDIR\routes"
     RMDir /r "$INSTDIR\services"
     RMDir /r "$INSTDIR\src"

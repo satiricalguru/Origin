@@ -42,27 +42,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install NSIS
+        shell: pwsh
         run: choco install nsis --yes --no-progress
-        shell: powershell
 
       - name: Create dist directory
-        run: New-Item -ItemType Directory -Force -Path dist
-        shell: powershell
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-      - name: Extract version from tag
-        id: version
+      - name: Refresh PATH so makensis is found
+        shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $ver = $tag.TrimStart('v')
-          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
-        shell: powershell
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + $env:PATH
+          echo "PATH=$env:PATH" >> $env:GITHUB_ENV
 
       - name: Build installer
+        shell: cmd
         run: |
-          makensis `
-            /DAPP_VERSION=${{ steps.version.outputs.VERSION }} `
-            installer\windows\origin.nsi
-        shell: powershell
+          makensis /DREPO_ROOT="%CD%" installer\windows\origin.nsi
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
@@ -96,16 +92,8 @@ jobs:
           name: windows-exe
           path: release-assets/
 
-      - name: Extract version from tag
-        id: version
+      - name: Generate release notes from commits
         run: |
-          TAG="${{ github.ref_name }}"
-          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
-
-      - name: Generate release notes from CHANGELOG / commits
-        id: notes
-        run: |
-          # Use git log since the previous tag (or all commits for first release)
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
           if [ -z "$PREV_TAG" ]; then
             RANGE="HEAD"
@@ -113,11 +101,13 @@ jobs:
             RANGE="${PREV_TAG}..HEAD"
           fi
           COMMITS=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges | head -30)
-          cat <<EOF > notes.md
+          cat > notes.md << 'NOTES_EOF'
           ## Origin ${{ github.ref_name }}
 
           ### What's New
-          ${COMMITS}
+          NOTES_EOF
+          echo "$COMMITS" >> notes.md
+          cat >> notes.md << 'NOTES_EOF'
 
           ---
 
@@ -128,22 +118,21 @@ jobs:
           2. Open the DMG and drag **Origin** to your Applications folder
           3. Double-click Origin in Applications to start the server
 
-          > **First run:** macOS may show a security warning. Right-click → Open to bypass Gatekeeper.
+          > **First run:** macOS may show a security warning — right-click → Open to bypass Gatekeeper.
 
           #### Windows
           1. Download **Origin-Setup.exe**
           2. Run the installer (admin rights required)
           3. Launch Origin from the Start Menu or Desktop shortcut
 
-          > **Requirement:** Python 3.11+ must be installed from [python.org](https://www.python.org/downloads/) (check "Add to PATH").
+          > **Requirement:** Python 3.11+ must be installed from [python.org](https://www.python.org/downloads/) — check "Add Python to PATH" during install.
 
           ---
 
           ### Requirements
           - **macOS 11+** (Apple Silicon or Intel) — Homebrew required
           - **Windows 10/11** — Python 3.11+ required
-          EOF
-          echo "NOTES_FILE=notes.md" >> $GITHUB_OUTPUT
+          NOTES_EOF
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

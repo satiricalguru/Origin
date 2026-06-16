@@ -57,19 +57,29 @@ jobs:
 
           $repoRoot = (Get-Location).Path
           Write-Host "Repo root: $repoRoot"
-          Write-Host "makensis: $(Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)"
 
-          # Write a minimal NSI that embeds the repo root at build time
-          # by generating a wrapper script with the path already substituted
-          $nsiContent = Get-Content "installer\windows\origin.nsi" -Raw
-          $nsiContent = $nsiContent -replace '!ifndef REPO_ROOT', '; REPO_ROOT injected by workflow'
-          $nsiContent = $nsiContent -replace '  !define REPO_ROOT "."', "; auto-set by workflow`n!define REPO_ROOT `"$repoRoot`""
-          $nsiContent = $nsiContent -replace '!endif', ''
-          $tmpNsi = Join-Path $env:TEMP "origin_build.nsi"
-          Set-Content -Path $tmpNsi -Value $nsiContent -Encoding UTF8
+          $makensis = Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          if (-not $makensis) {
+            Write-Error "makensis not found on PATH after choco install"
+            exit 1
+          }
+          Write-Host "makensis: $makensis"
 
-          Write-Host "Running makensis on: $tmpNsi"
-          & makensis $tmpNsi
+          # Write a small wrapper NSI that sets REPO_ROOT and includes the
+          # main script. Using a wrapper avoids any regex/escaping issues.
+          $nsiPath = Join-Path $repoRoot 'installer\windows\origin.nsi'
+          $wrapperContent = @"
+; Auto-generated wrapper — sets REPO_ROOT then includes origin.nsi
+!define REPO_ROOT `"$repoRoot`"
+!include `"$nsiPath`"
+"@
+          $wrapperNsi = Join-Path $env:TEMP 'origin_wrapper.nsi'
+          [System.IO.File]::WriteAllText($wrapperNsi, $wrapperContent, [System.Text.Encoding]::UTF8)
+          Write-Host "Wrapper NSI written to: $wrapperNsi"
+          Get-Content $wrapperNsi
+
+          # Run makensis with verbose output so errors are visible in the log
+          & $makensis -V3 $wrapperNsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload EXE artifact

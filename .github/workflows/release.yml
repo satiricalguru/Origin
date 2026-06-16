@@ -59,26 +59,21 @@ jobs:
           Write-Host "Repo root: $repoRoot"
 
           $makensis = Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-          if (-not $makensis) {
-            Write-Error "makensis not found on PATH after choco install"
-            exit 1
-          }
+          if (-not $makensis) { Write-Error "makensis not found"; exit 1 }
           Write-Host "makensis: $makensis"
 
-          # Write a small wrapper NSI that sets REPO_ROOT and includes the
-          # main script. Using a wrapper avoids any regex/escaping issues.
+          # Build wrapper NSI using string concat (here-strings break YAML indentation)
           $nsiPath = Join-Path $repoRoot 'installer\windows\origin.nsi'
-          $wrapperContent = @"
-; Auto-generated wrapper — sets REPO_ROOT then includes origin.nsi
-!define REPO_ROOT `"$repoRoot`"
-!include `"$nsiPath`"
-"@
+          $wrapperContent = "; Auto-generated wrapper`n" +
+            "!define REPO_ROOT `"$repoRoot`"`n" +
+            "!include `"$nsiPath`""
+
           $wrapperNsi = Join-Path $env:TEMP 'origin_wrapper.nsi'
           [System.IO.File]::WriteAllText($wrapperNsi, $wrapperContent, [System.Text.Encoding]::UTF8)
-          Write-Host "Wrapper NSI written to: $wrapperNsi"
+          Write-Host "--- Wrapper NSI ---"
           Get-Content $wrapperNsi
+          Write-Host "-------------------"
 
-          # Run makensis with verbose output so errors are visible in the log
           & $makensis -V3 $wrapperNsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

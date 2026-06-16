@@ -15,7 +15,7 @@
 !endif
 
 !define APP_NAME      "Origin"
-!define APP_VERSION   "1.0.0"
+!define APP_VERSION   "1.0.1"
 !define APP_PUBLISHER "Origin"
 !define APP_URL       "https://github.com/satiricalguru/Origin"
 !define INSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
@@ -153,8 +153,7 @@ SectionEnd
 ;  Launch function
 ; ============================================================
 Function LaunchApp
-    ExecShell "" "powershell.exe" \
-        "-ExecutionPolicy Bypass -File `"$INSTDIR\launch-windows.ps1`""
+    ExecShell "" "powershell.exe" "-ExecutionPolicy Bypass -File `"$INSTDIR\launch-windows.ps1`""
 FunctionEnd
 
 ; ============================================================

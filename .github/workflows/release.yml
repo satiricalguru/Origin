@@ -49,16 +49,28 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-      - name: Refresh PATH so makensis is found
+      - name: Build installer
         shell: pwsh
         run: |
+          # Re-read machine PATH so choco-installed makensis is available
           $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + $env:PATH
-          echo "PATH=$env:PATH" >> $env:GITHUB_ENV
 
-      - name: Build installer
-        shell: cmd
-        run: |
-          makensis /DREPO_ROOT="%CD%" installer\windows\origin.nsi
+          $repoRoot = (Get-Location).Path
+          Write-Host "Repo root: $repoRoot"
+          Write-Host "makensis: $(Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)"
+
+          # Write a minimal NSI that embeds the repo root at build time
+          # by generating a wrapper script with the path already substituted
+          $nsiContent = Get-Content "installer\windows\origin.nsi" -Raw
+          $nsiContent = $nsiContent -replace '!ifndef REPO_ROOT', '; REPO_ROOT injected by workflow'
+          $nsiContent = $nsiContent -replace '  !define REPO_ROOT "."', "; auto-set by workflow`n!define REPO_ROOT `"$repoRoot`""
+          $nsiContent = $nsiContent -replace '!endif', ''
+          $tmpNsi = Join-Path $env:TEMP "origin_build.nsi"
+          Set-Content -Path $tmpNsi -Value $nsiContent -Encoding UTF8
+
+          Write-Host "Running makensis on: $tmpNsi"
+          & makensis $tmpNsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
@@ -92,47 +104,35 @@ jobs:
           name: windows-exe
           path: release-assets/
 
-      - name: Generate release notes from commits
+      - name: Generate release notes
         run: |
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
           if [ -z "$PREV_TAG" ]; then
-            RANGE="HEAD"
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges | head -20)
           else
-            RANGE="${PREV_TAG}..HEAD"
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges | head -20)
           fi
-          COMMITS=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges | head -30)
-          cat > notes.md << 'NOTES_EOF'
-          ## Origin ${{ github.ref_name }}
-
-          ### What's New
-          NOTES_EOF
-          echo "$COMMITS" >> notes.md
-          cat >> notes.md << 'NOTES_EOF'
-
-          ---
-
-          ### Installation
-
-          #### macOS
-          1. Download **Origin.dmg**
-          2. Open the DMG and drag **Origin** to your Applications folder
-          3. Double-click Origin in Applications to start the server
-
-          > **First run:** macOS may show a security warning — right-click → Open to bypass Gatekeeper.
-
-          #### Windows
-          1. Download **Origin-Setup.exe**
-          2. Run the installer (admin rights required)
-          3. Launch Origin from the Start Menu or Desktop shortcut
-
-          > **Requirement:** Python 3.11+ must be installed from [python.org](https://www.python.org/downloads/) — check "Add Python to PATH" during install.
-
-          ---
-
-          ### Requirements
-          - **macOS 11+** (Apple Silicon or Intel) — Homebrew required
-          - **Windows 10/11** — Python 3.11+ required
-          NOTES_EOF
+          {
+            printf '## Origin %s\n\n' "${{ github.ref_name }}"
+            printf '### What'"'"'s New\n'
+            printf '%s\n' "$COMMITS"
+            printf '\n---\n\n'
+            printf '### Installation\n\n'
+            printf '#### macOS\n'
+            printf '1. Download **Origin.dmg**\n'
+            printf '2. Open the DMG and drag **Origin** to Applications\n'
+            printf '3. Double-click Origin to start — it will open in your browser\n\n'
+            printf '> **First run:** right-click → Open to bypass Gatekeeper.\n\n'
+            printf '#### Windows\n'
+            printf '1. Download **Origin-Setup.exe**\n'
+            printf '2. Run the installer (admin rights required)\n'
+            printf '3. Launch Origin from the Start Menu or Desktop\n\n'
+            printf '> **Requirement:** [Python 3.11+](https://python.org/downloads) — check "Add to PATH" during install.\n\n'
+            printf '---\n\n'
+            printf '### Requirements\n'
+            printf '- **macOS 11+** — Homebrew required\n'
+            printf '- **Windows 10/11** — Python 3.11+ required\n'
+          } > notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

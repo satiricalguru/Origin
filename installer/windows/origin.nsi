@@ -2,15 +2,14 @@
 ;  Origin — Windows NSIS Installer Script
 ;  Produces: dist\Origin-Setup.exe
 ;
-;  Called from repo root by the GitHub Actions workflow:
-;    makensis /DREPO_ROOT="." installer\windows\origin.nsi
+;  REPO_ROOT is injected at compile time by the build workflow:
+;    makensis /DREPO_ROOT="C:\path\to\repo" installer\windows\origin.nsi
 ;
-;  REPO_ROOT is passed in by the workflow so all paths are
-;  absolute on the runner (no fragile relative ..\ navigation).
+;  For local builds, run from repo root:
+;    makensis /DREPO_ROOT="." installer\windows\origin.nsi
 ; ============================================================
 
-; REPO_ROOT must be passed via /D on the command line.
-; Default to current dir so local builds still work if run from root.
+; REPO_ROOT must be set via /D on the command line.
 !ifndef REPO_ROOT
   !define REPO_ROOT "."
 !endif
@@ -21,7 +20,7 @@
 !define APP_URL       "https://github.com/satiricalguru/Origin"
 !define INSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 
-; Output file — written to dist\ inside the repo root
+; Output file
 OutFile "${REPO_ROOT}\dist\Origin-Setup.exe"
 
 ; Compression
@@ -41,7 +40,7 @@ RequestExecutionLevel admin
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "${INSTALL_REG_KEY}" "InstallLocation"
 
-; --- MUI Pages (no custom icon — uses NSIS default) ---
+; --- MUI Pages ---
 !define MUI_ABORTWARNING
 
 !define MUI_WELCOMEPAGE_TITLE  "Welcome to Origin ${APP_VERSION}"
@@ -64,21 +63,61 @@ InstallDirRegKey HKLM "${INSTALL_REG_KEY}" "InstallLocation"
 !insertmacro MUI_LANGUAGE "English"
 
 ; ============================================================
+;  Macro: copy a directory if it exists
+; ============================================================
+!macro CopyDir SRC DEST
+  SetOutPath "${DEST}"
+  File /r "${SRC}\*"
+!macroend
+
+; ============================================================
 ;  Installer Section
 ; ============================================================
 Section "Origin (required)" SecMain
-    SectionIn RO   ; Cannot be deselected
+    SectionIn RO
 
+    ; Root-level files
     SetOutPath "$INSTDIR"
+    File "${REPO_ROOT}\app.py"
+    File "${REPO_ROOT}\requirements.txt"
+    File "${REPO_ROOT}\requirements-optional.txt"
+    File "${REPO_ROOT}\setup.py"
+    File "${REPO_ROOT}\pyproject.toml"
+    File "${REPO_ROOT}\launch-windows.ps1"
+    File "${REPO_ROOT}\LICENSE"
+    File "${REPO_ROOT}\README.md"
 
-    ; Copy repo files (excludes runtime/generated dirs)
-    File /r /x "venv" /x "data" /x ".git" /x "__pycache__" /x "dist" /x "logs" /x ".pytest_cache" "${REPO_ROOT}\*"
+    ; Subdirectories
+    SetOutPath "$INSTDIR\routes"
+    File /r "${REPO_ROOT}\routes\*"
 
-    ; Create runtime dirs so the app can write to them on first launch
+    SetOutPath "$INSTDIR\services"
+    File /r "${REPO_ROOT}\services\*"
+
+    SetOutPath "$INSTDIR\src"
+    File /r "${REPO_ROOT}\src\*"
+
+    SetOutPath "$INSTDIR\core"
+    File /r "${REPO_ROOT}\core\*"
+
+    SetOutPath "$INSTDIR\config"
+    File /r "${REPO_ROOT}\config\*"
+
+    SetOutPath "$INSTDIR\static"
+    File /r "${REPO_ROOT}\static\*"
+
+    SetOutPath "$INSTDIR\mcp_servers"
+    File /r "${REPO_ROOT}\mcp_servers\*"
+
+    SetOutPath "$INSTDIR\scripts"
+    File /r "${REPO_ROOT}\scripts\*"
+
+    ; Runtime dirs
     CreateDirectory "$INSTDIR\logs"
     CreateDirectory "$INSTDIR\data"
 
-    ; Write uninstaller
+    ; Uninstaller
+    SetOutPath "$INSTDIR"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     ; Registry: Add/Remove Programs
@@ -91,7 +130,6 @@ Section "Origin (required)" SecMain
     WriteRegDWORD HKLM "${INSTALL_REG_KEY}" "NoModify"         1
     WriteRegDWORD HKLM "${INSTALL_REG_KEY}" "NoRepair"         1
 
-    ; Estimate install size
     ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
     IntFmt $0 "0x%08X" $0
     WriteRegDWORD HKLM "${INSTALL_REG_KEY}" "EstimatedSize" "$0"
@@ -101,7 +139,6 @@ Section "Origin (required)" SecMain
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" \
         "powershell.exe" \
         "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTDIR\launch-windows.ps1`""
-
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" \
         "$INSTDIR\Uninstall.exe"
 
@@ -113,7 +150,7 @@ Section "Origin (required)" SecMain
 SectionEnd
 
 ; ============================================================
-;  Launch function (called from Finish page)
+;  Launch function
 ; ============================================================
 Function LaunchApp
     ExecShell "" "powershell.exe" \
@@ -124,13 +161,11 @@ FunctionEnd
 ;  Uninstaller Section
 ; ============================================================
 Section "Uninstall"
-    ; Remove shortcuts
     Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
     Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
     RMDir  "$SMPROGRAMS\${APP_NAME}"
     Delete "$DESKTOP\${APP_NAME}.lnk"
 
-    ; Remove installed files (preserve user data/)
     RMDir /r "$INSTDIR\routes"
     RMDir /r "$INSTDIR\services"
     RMDir /r "$INSTDIR\src"
@@ -139,24 +174,14 @@ Section "Uninstall"
     RMDir /r "$INSTDIR\static"
     RMDir /r "$INSTDIR\mcp_servers"
     RMDir /r "$INSTDIR\scripts"
-    RMDir /r "$INSTDIR\installer"
-    RMDir /r "$INSTDIR\venv"
     RMDir /r "$INSTDIR\logs"
-    RMDir /r "$INSTDIR\.github"
     Delete "$INSTDIR\*.py"
     Delete "$INSTDIR\*.toml"
     Delete "$INSTDIR\*.txt"
     Delete "$INSTDIR\*.md"
-    Delete "$INSTDIR\*.sh"
     Delete "$INSTDIR\*.ps1"
-    Delete "$INSTDIR\*.yml"
-    Delete "$INSTDIR\*.json"
     Delete "$INSTDIR\Uninstall.exe"
 
-    ; Remove registry keys
     DeleteRegKey HKLM "${INSTALL_REG_KEY}"
-
-    ; Remove install dir if empty
     RMDir "$INSTDIR"
-
 SectionEnd

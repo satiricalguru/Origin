@@ -126,27 +126,36 @@ jobs:
           else
             COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges | head -20)
           fi
-          {
-            printf '## Origin %s\n\n' "${{ github.ref_name }}"
-            printf '### What'"'"'s New\n'
-            printf '%s\n' "$COMMITS"
-            printf '\n---\n\n'
-            printf '### Installation\n\n'
-            printf '#### macOS\n'
-            printf '1. Download **Origin.dmg**\n'
-            printf '2. Open the DMG and drag **Origin** to Applications\n'
-            printf '3. Double-click Origin to start — it will open in your browser\n\n'
-            printf '> **First run:** right-click → Open to bypass Gatekeeper.\n\n'
-            printf '#### Windows\n'
-            printf '1. Download **Origin-Setup.exe**\n'
-            printf '2. Run the installer (admin rights required)\n'
-            printf '3. Launch Origin from the Start Menu or Desktop\n\n'
-            printf '> **Requirement:** [Python 3.11+](https://python.org/downloads) — check "Add to PATH" during install.\n\n'
-            printf '---\n\n'
-            printf '### Requirements\n'
-            printf '- **macOS 11+** — Homebrew required\n'
-            printf '- **Windows 10/11** — Python 3.11+ required\n'
-          } > notes.md
+          cat > notes.md <<ENDNOTES
+          ## Origin ${{ github.ref_name }}
+
+          ### What's New
+          ${COMMITS}
+
+          ---
+
+          ### Installation
+
+          #### macOS
+          1. Download **Origin.dmg**
+          2. Open the DMG and drag **Origin** to Applications
+          3. Double-click Origin to start — it will open in your browser
+
+          > **First run:** right-click → Open to bypass Gatekeeper.
+
+          #### Windows
+          1. Download **Origin-Setup.exe**
+          2. Run the installer (admin rights required)
+          3. Launch Origin from the Start Menu or Desktop
+
+          > **Requirement:** [Python 3.11+](https://python.org/downloads) — check "Add to PATH" during install.
+
+          ---
+
+          ### Requirements
+          - **macOS 11+** — Homebrew required
+          - **Windows 10/11** — Python 3.11+ required
+          ENDNOTES
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

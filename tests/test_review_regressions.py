@@ -556,3 +556,87 @@ def test_list_sessions_includes_ide_copilot_when_requested(monkeypatch):
     assert "[IDE] Workspace Copilot" in session_names
     assert "Nobody" in session_names
 
+
+def test_rename_session_endpoint_id_empty_string(monkeypatch):
+    import routes.session_routes as session_routes
+    from core.session_manager import SessionManager
+
+    fake_session = MagicMock()
+    fake_session.model = "old-model"
+    fake_session.endpoint_url = "old-url"
+    fake_session.headers = {}
+
+    fake_manager = MagicMock(spec=SessionManager)
+    fake_manager.get_session.return_value = fake_session
+
+    fake_db_session = MagicMock()
+    fake_db_session.owner = "tester"
+    
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.first.return_value = fake_db_session
+
+    monkeypatch.setattr(session_routes, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(session_routes, "get_current_user", lambda req: "tester")
+
+    session_routes.setup_session_routes(fake_manager, {"REQUEST_TIMEOUT": 10})
+
+    rename_endpoint = None
+    for route in reversed(session_routes.router.routes):
+        if route.path == "/api/session/{sid}" and "PATCH" in route.methods:
+            rename_endpoint = route.endpoint
+            break
+
+    assert rename_endpoint is not None
+
+    request = SimpleNamespace()
+    
+    # Verify that calling with endpoint_id = " " (or empty/whitespace) succeeds and doesn't raise HTTPException
+    result = rename_endpoint(
+        request=request,
+        sid="s1",
+        name=None,
+        folder=None,
+        model="new-model",
+        endpoint_url="new-url",
+        endpoint_id="   "
+    )
+    print("MOCK SESSION MODEL AFTER PATCH:", fake_session.model)
+    print("PATCH RESULT:", result)
+    assert result["model"] == "new-model"
+    assert result["endpoint_url"] == "new-url"
+    assert fake_session.model == "new-model"
+    assert fake_session.endpoint_url == "new-url"
+
+
+def test_cleanup_empty_sessions_preserves_ide_copilot(monkeypatch):
+    from core.session_manager import SessionManager
+    
+    # Mock database SessionLocal
+    fake_sessions_in_db = [
+        SimpleNamespace(id="normal_empty", name="Normal", message_count=0, archived=False, last_accessed=None),
+        SimpleNamespace(id="ide_empty", name="[IDE] Workspace Copilot", message_count=0, archived=False, last_accessed=None),
+    ]
+    
+    fake_db = MagicMock()
+    fake_db.query.return_value.all.return_value = fake_sessions_in_db
+    
+    monkeypatch.setattr("core.session_manager.SessionLocal", lambda: fake_db)
+    
+    manager = SessionManager()
+    manager.sessions = {
+        "normal_empty": SimpleNamespace(id="normal_empty", name="Normal", history=[]),
+        "ide_empty": SimpleNamespace(id="ide_empty", name="[IDE] Workspace Copilot", history=[])
+    }
+    
+    stats = manager.cleanup_empty_sessions()
+    
+    # Verify that 'normal_empty' was deleted (db.delete called) but 'ide_empty' was not
+    deleted_ids = [call[0][0].id for call in fake_db.delete.call_args_list]
+    assert "normal_empty" in deleted_ids
+    assert "ide_empty" not in deleted_ids
+    
+    # In-memory session should be deleted for normal, but preserved for ide
+    assert "normal_empty" not in manager.sessions
+    assert "ide_empty" in manager.sessions
+
+

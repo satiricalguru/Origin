@@ -172,7 +172,8 @@ import createResearchSynapse from './researchSynapse.js';
 
         if (slashIdx >= 0 && (slashIdx === 0 || val[slashIdx - 1] === ' ' || val[slashIdx - 1] === '\n')) {
           const partial = textBeforeCursor.substring(slashIdx + 1).toLowerCase();
-          const matches = Object.keys(_ALIAS_MAP || {})
+          const allCmds = slashCommands.getAutocompleteCommands ? slashCommands.getAutocompleteCommands() : Object.keys(_ALIAS_MAP || {});
+          const matches = allCmds
             .filter(name => {
               const fullName = name.startsWith('/') ? name : '/' + name;
               return fullName.startsWith('/' + partial) || name.startsWith(partial);
@@ -180,7 +181,7 @@ import createResearchSynapse from './researchSynapse.js';
             .sort()
             .slice(0, 10);
 
-          if (matches.length > 0 && partial.length > 0) {
+          if (matches.length > 0) {
             if (!_acDropdown) {
               _acDropdown = document.createElement('div');
               _acDropdown.className = 'slash-autocomplete';
@@ -191,8 +192,7 @@ import createResearchSynapse from './researchSynapse.js';
 
             _acDropdown.innerHTML = matches.map((m, i) => {
               const cmdName = m.startsWith('/') ? m : '/' + m;
-              const cmdDef = _ALIAS_MAP && _ALIAS_MAP[m];
-              const helpText = cmdDef ? (cmdDef.help || '') : '';
+              const helpText = slashCommands.getCommandHelp ? slashCommands.getCommandHelp(m) : '';
               return `<div class="slash-ac-item" data-cmd="${_esc(cmdName)}" style="padding:6px 12px;cursor:pointer;display:flex;justify-content:space-between;border-radius:4px;margin:1px;${i === 0 ? 'background:var(--accent);color:#fff;' : 'color:var(--fg);'}">` +
                 `<span><strong>${_esc(cmdName)}</strong></span>` +
                 (helpText ? `<span style="opacity:0.6;font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(helpText)}</span>` : '') +

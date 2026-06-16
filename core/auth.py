@@ -403,6 +403,9 @@ class AuthManager:
     # ------------------------------------------------------------------
 
     def verify_password(self, username: str, password: str) -> bool:
+        # Reload from disk on every login so out-of-band password resets
+        # (e.g. running the reset script) take effect without a server restart.
+        self._load()
         username = username.strip().lower()
         if username not in self.users:
             return False

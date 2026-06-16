@@ -235,7 +235,7 @@ def try_fallback_endpoint(sess, session_id: str) -> dict | None:
                 _db.query(DBSession).filter(DBSession.id == session_id).update({
                     "model": new_model,
                     "endpoint_url": chat_url,
-                    "headers": json.dumps(new_headers),
+                    "headers": new_headers,
                 })
                 _db.commit()
             finally:
@@ -324,7 +324,7 @@ def resolve_session_auth(sess, session_id: str):
                 if ep and ep.api_key:
                     sess.headers = build_headers(ep.api_key, ep.base_url)
                     db.query(DBSession).filter(DBSession.id == session_id).update(
-                        {"headers": json.dumps(sess.headers)}
+                        {"headers": sess.headers}
                     )
                     db.commit()
                     logger.info(f"Resolved and persisted auth headers for session {session_id} from endpoint {ep.name}")

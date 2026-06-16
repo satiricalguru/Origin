@@ -6,6 +6,7 @@ import * as Modals from './modalManager.js';
 import uiModule from './ui.js';
 import { providerLogo } from './providers.js';
 import Storage from './storage.js';
+import { isCommand, handleSlashCommand } from './slashCommands.js';
 
 const API_BASE = window.location.origin;
 
@@ -700,12 +701,92 @@ function _renderIDE() {
     }
     const copilotText = document.getElementById('ide-right-chat-textarea');
     if (copilotText) {
-        copilotText.onkeydown = (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+        let _acDropdown = null;
+        
+        copilotText.addEventListener('input', () => {
+            const val = copilotText.value;
+            const cursorPos = 0 || copilotText.selectionStart;
+            const textBeforeCursor = val.substring(0, cursorPos);
+            const slashIdx = textBeforeCursor.lastIndexOf('/');
+
+            if (slashIdx >= 0 && (slashIdx === 0 || val[slashIdx - 1] === ' ' || val[slashIdx - 1] === '\n')) {
+                const partial = textBeforeCursor.substring(slashIdx + 1).toLowerCase();
+                
+                const allCmds = slashCommands.getAutocompleteCommands ? slashCommands.getAutocompleteCommands() : [];
+                const matches = allCmds
+                    .filter(name => {
+                        const fullName = name.startsWith('/') ? name : '/' + name;
+                        return fullName.startsWith('/' + partial) || name.startsWith(partial);
+                    })
+                    .sort()
+                    .slice(0, 10);
+
+                if (matches.length > 0) {
+                    if (!_acDropdown) {
+                        _acDropdown = document.createElement('div');
+                        _acDropdown.className = 'slash-autocomplete';
+                        _acDropdown.style.cssText = 'position:absolute;bottom:100%;left:0;right:0;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 -4px 16px rgba(0,0,0,0.3);z-index:10000;max-height:200px;overflow-y:auto;font-size:12px;';
+                        copilotText.parentElement.style.position = 'relative';
+                        copilotText.parentElement.appendChild(_acDropdown);
+                    }
+
+                    _acDropdown.innerHTML = matches.map((m, i) => {
+                        const cmdName = m.startsWith('/') ? m : '/' + m;
+                        const helpText = slashCommands.getCommandHelp ? slashCommands.getCommandHelp(m) : '';
+                        return `<div class="slash-ac-item" data-cmd="${_escHtml(cmdName)}" style="padding:6px 12px;cursor:pointer;display:flex;justify-content:space-between;border-radius:4px;margin:1px;${i === 0 ? 'background:var(--accent);color:#fff;' : 'color:var(--fg);'}">` +
+                            `<span><strong>${_escHtml(cmdName)}</strong></span>` +
+                            (helpText ? `<span style="opacity:0.6;font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(helpText)}</span>` : '') +
+                            `</div>`;
+                    }).join('');
+
+                    _acDropdown.style.display = 'block';
+
+                    _acDropdown.querySelectorAll('.slash-ac-item').forEach(el => {
+                        el.onclick = () => {
+                            const cmd = el.dataset.cmd;
+                            const beforeSlash = val.substring(0, slashIdx);
+                            const afterSlash = val.substring(cursorPos);
+                            copilotText.value = beforeSlash + cmd + ' ' + afterSlash;
+                            copilotText.focus();
+                            copilotText.selectionStart = copilotText.selectionEnd = beforeSlash.length + cmd.length + 1;
+                            if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+                        };
+                        el.onmouseenter = () => {
+                            _acDropdown.querySelectorAll('.slash-ac-item').forEach(e => { e.style.background = 'transparent'; e.style.color = 'var(--fg)'; });
+                            el.style.background = 'var(--accent)'; el.style.color = '#fff';
+                        };
+                    });
+                } else {
+                    if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+                }
+            } else {
+                if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+            }
+        });
+
+        copilotText.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && _acDropdown) {
+                _acDropdown.style.display = 'none';
+                _acDropdown = null;
+                e.preventDefault();
+            }
+            if ((e.key === 'Tab' || e.key === 'Enter') && _acDropdown && _acDropdown.style.display !== 'none') {
+                const selected = _acDropdown.querySelector('.slash-ac-item');
+                if (selected) {
+                    e.preventDefault();
+                    selected.click();
+                }
+            } else if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 _sendCopilotMessage();
             }
-        };
+        });
+
+        copilotText.addEventListener('blur', () => {
+            setTimeout(() => {
+                if (_acDropdown) { _acDropdown.style.display = 'none'; _acDropdown = null; }
+            }, 200);
+        });
     }
 
     // Wire Codex tab — open inline AI code editor
@@ -1088,14 +1169,16 @@ async function _renderExplorer(container) {
         headerContainer.innerHTML = `
             <div class="ide-workspace-switcher" style="border-bottom: 1px solid var(--border);">
                 <label>Workspace Folder</label>
-                <div class="ide-workspace-input-row">
-                    <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" placeholder="Enter absolute directory path..." />
+                <div class="ide-workspace-input-row" style="display: flex; gap: 4px; align-items: center;">
+                    <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" placeholder="Enter absolute directory path..." style="flex: 1;" />
+                    <button class="ide-workspace-btn" id="ide-workspace-browse-btn" title="Choose folder via Finder/Explorer" style="padding: 0 8px;">📁</button>
                     <button class="ide-workspace-btn" id="ide-workspace-open-btn">Open</button>
                 </div>
             </div>
         `;
         container.appendChild(headerContainer);
         const openBtn = headerContainer.querySelector('#ide-workspace-open-btn');
+        const browseBtn = headerContainer.querySelector('#ide-workspace-browse-btn');
         const pathInput = headerContainer.querySelector('#ide-workspace-path-input');
         if (openBtn && pathInput) {
             openBtn.onclick = (e) => {
@@ -1109,6 +1192,12 @@ async function _renderExplorer(container) {
                     const v = pathInput.value.trim();
                     if (v) _changeWorkspaceFolder(v);
                 }
+            };
+        }
+        if (browseBtn) {
+            browseBtn.onclick = (e) => {
+                e.stopPropagation();
+                _openFolderPrompt();
             };
         }
         const hint = document.createElement('div');
@@ -1133,8 +1222,9 @@ async function _renderExplorer(container) {
         headerContainer.innerHTML = `
             <div class="ide-workspace-switcher" style="border-bottom: 1px solid var(--border);">
                 <label>Workspace Folder</label>
-                <div class="ide-workspace-input-row">
-                    <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" value="${_workspaceRoot}" placeholder="Enter absolute directory path..." />
+                <div class="ide-workspace-input-row" style="display: flex; gap: 4px; align-items: center;">
+                    <input type="text" class="ide-workspace-input" id="ide-workspace-path-input" value="${_workspaceRoot}" placeholder="Enter absolute directory path..." style="flex: 1;" />
+                    <button class="ide-workspace-btn" id="ide-workspace-browse-btn" title="Choose folder via Finder/Explorer" style="padding: 0 8px;">📁</button>
                     <button class="ide-workspace-btn" id="ide-workspace-open-btn">Open</button>
                 </div>
             </div>
@@ -1145,6 +1235,7 @@ async function _renderExplorer(container) {
         container.appendChild(headerContainer);
         
         const openBtn = headerContainer.querySelector('#ide-workspace-open-btn');
+        const browseBtn = headerContainer.querySelector('#ide-workspace-browse-btn');
         const pathInput = headerContainer.querySelector('#ide-workspace-path-input');
         const filterInput = headerContainer.querySelector('#ide-explorer-filter-input');
         
@@ -1155,6 +1246,12 @@ async function _renderExplorer(container) {
         };
         
         openBtn.onclick = triggerOpenFolder;
+        if (browseBtn) {
+            browseBtn.onclick = (e) => {
+                e.stopPropagation();
+                _openFolderPrompt();
+            };
+        }
         pathInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') triggerOpenFolder();
         });
@@ -1385,11 +1482,30 @@ function _createNewWindow() {
     window.open(window.location.href, '_blank');
 }
 
-function _openFolderPrompt() {
+async function _openFolderPrompt() {
+    try {
+        const res = await fetch(`${API_BASE}/api/ide/select_folder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.path) {
+                await _changeWorkspaceFolder(data.path);
+                return;
+            } else if (data.cancelled) {
+                // User cancelled, don't fallback to text prompt
+                return;
+            }
+        }
+    } catch (e) {
+        console.warn("Native folder selection failed or not supported, falling back to prompt:", e);
+    }
+
     const current = _workspaceRoot || '';
     const path = prompt("Enter the absolute path of the folder to open:", current);
     if (path && path.trim()) {
-        _changeWorkspaceFolder(path.trim());
+        await _changeWorkspaceFolder(path.trim());
     }
 }
 
@@ -2226,7 +2342,7 @@ function _renderWelcomePage() {
                     </div>
                     <div class="welcome-action-item" id="welcome-open-folder">
                         <span class="welcome-action-icon">📂</span>
-                        <span class="welcome-action-label">Open...</span>
+                        <span class="welcome-action-label">Open Folder...</span>
                     </div>
                     <div class="welcome-action-item" id="welcome-clone-repo">
                         <span class="welcome-action-icon">🌿</span>
@@ -2273,12 +2389,7 @@ function _renderWelcomePage() {
     if (openFolderBtn) {
         openFolderBtn.onclick = (e) => {
             e.stopPropagation();
-            _switchPanel('explorer');
-            const pathInput = document.getElementById('ide-workspace-path-input');
-            if (pathInput) {
-                pathInput.focus();
-                pathInput.select();
-            }
+            _openFolderPrompt();
         };
     }
 
@@ -2763,7 +2874,9 @@ async function _populateIdePicker(filter = '') {
                     const fd = new FormData();
                     fd.append('model', model);
                     fd.append('endpoint_url', item.url || '');
-                    fd.append('endpoint_id', item.endpoint_id || '');
+                    if (item.endpoint_id) {
+                        fd.append('endpoint_id', item.endpoint_id);
+                    }
 
                     try {
                         const switchRes = await fetch(`${API_BASE}/api/session/${sessionId}`, {
@@ -3094,7 +3207,14 @@ async function _sendCopilotMessage() {
     const textarea = document.getElementById('ide-right-chat-textarea');
     if (!textarea) return;
     const text = textarea.value.trim();
-    if (!text) return;
+    // Intercept slash commands
+    if (isCommand(text)) {
+        textarea.value = '';
+        const handled = await handleSlashCommand(text);
+        if (handled) {
+            return;
+        }
+    }
 
     // Retrieve or initialize the dedicated IDE Copilot session
     const sessionId = await _ensureIdeSession();
@@ -3141,9 +3261,9 @@ async function _sendCopilotMessage() {
     const formData = new FormData();
     formData.append('message', text);
     formData.append('session', sessionId);
-    formData.append('mode', 'chat');
-    formData.append('allow_bash', 'false');
-    formData.append('allow_web_search', 'false');
+    formData.append('mode', 'agent');
+    formData.append('allow_bash', 'true');
+    formData.append('allow_web_search', 'true');
 
     // Inject current file context if available
     if (_activeTabIdx >= 0 && _openTabs[_activeTabIdx]) {

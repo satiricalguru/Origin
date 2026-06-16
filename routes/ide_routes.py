@@ -88,8 +88,74 @@ class FileRenameRequest(BaseModel):
 class WorkspaceUpdateRequest(BaseModel):
     path: str
 
+def select_directory_dialog() -> Optional[str]:
+    """Open a native folder dialog to select a workspace directory."""
+    import sys
+    import subprocess
+    
+    if sys.platform == "darwin":
+        # AppleScript for macOS (bring Finder to front first)
+        cmd = [
+            "osascript",
+            "-e", 'tell application "Finder"',
+            "-e", 'activate',
+            "-e", 'set theFolder to choose folder with prompt "Select Workspace Folder"',
+            "-e", 'POSIX path of theFolder',
+            "-e", 'end tell'
+        ]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            path = res.stdout.strip()
+            if path:
+                return path
+        except subprocess.CalledProcessError as e:
+            # User cancelled or AppleScript failed
+            logger.info(f"User cancelled folder dialog or AppleScript failed: {e.stderr}")
+            return None
+    elif sys.platform == "win32":
+        # PowerShell for Windows (using a TopMost form owner to bring dialog to front)
+        ps_script = (
+            "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;"
+            "$objForm = New-Object System.Windows.Forms.FolderBrowserDialog;"
+            "$objForm.Description = 'Select Workspace Folder';"
+            "$objForm.ShowNewFolderButton = $true;"
+            "$w = New-Object System.Windows.Forms.Form;"
+            "$w.TopMost = $true;"
+            "$res = $objForm.ShowDialog($w);"
+            "if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Host $objForm.SelectedPath }"
+        )
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            path = res.stdout.strip()
+            if path:
+                return path
+        except subprocess.CalledProcessError as e:
+            logger.info(f"User cancelled folder dialog or PowerShell failed: {e.stderr}")
+            return None
+    elif sys.platform.startswith("linux"):
+        # Zenity for Linux (common on Gnome / Ubuntu)
+        if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", "--directory", "--title=Select Workspace Folder"]
+            try:
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+                path = res.stdout.strip()
+                if path:
+                    return path
+            except subprocess.CalledProcessError:
+                return None
+    return None
+
 def setup_ide_routes() -> APIRouter:
     router = APIRouter(tags=["ide"])
+
+    @router.post("/api/ide/select_folder")
+    def select_folder() -> Dict[str, Any]:
+        """Open a native folder dialog to select a workspace directory."""
+        path = select_directory_dialog()
+        if path:
+            return {"success": True, "path": path}
+        return {"success": False, "cancelled": True}
 
     @router.get("/api/ide/workspace")
     async def get_workspace_root() -> Dict[str, str]:

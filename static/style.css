@@ -35894,6 +35894,7 @@ pre {
 .ide-workspace-input-row {
   display: flex;
   gap: 4px;
+  align-items: center;
 }
 
 .ide-workspace-input {
@@ -35903,7 +35904,9 @@ pre {
   color: #cccccc;
   font-family: inherit;
   font-size: 11px;
-  padding: 4px 6px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px;
   border-radius: 3px;
   outline: none;
 }
@@ -35919,7 +35922,13 @@ pre {
   border-radius: 3px;
   font-size: 11px;
   font-weight: 500;
-  padding: 4px 10px;
+  height: 24px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  line-height: 1;
   cursor: pointer;
   transition: background-color 0.15s;
 }

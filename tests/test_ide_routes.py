@@ -191,3 +191,17 @@ class TestIdeRoutes:
         assert res.status_code == 200
         assert res.json() == []
 
+    def test_select_folder(self, client, monkeypatch):
+        import routes.ide_routes as ide_routes
+        monkeypatch.setattr(ide_routes, "select_directory_dialog", lambda: "/dummy/path")
+        response = client.post("/api/ide/select_folder")
+        assert response.status_code == 200
+        assert response.json() == {"success": True, "path": "/dummy/path"}
+
+    def test_select_folder_cancelled(self, client, monkeypatch):
+        import routes.ide_routes as ide_routes
+        monkeypatch.setattr(ide_routes, "select_directory_dialog", lambda: None)
+        response = client.post("/api/ide/select_folder")
+        assert response.status_code == 200
+        assert response.json() == {"success": False, "cancelled": True}
+

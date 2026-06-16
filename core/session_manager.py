@@ -29,6 +29,22 @@ def _message_timestamp_iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat().replace("+00:00", "Z")
 
 
+def parse_db_headers(headers) -> dict:
+    """Safely parse headers from DB, handling double serialization."""
+    if isinstance(headers, str):
+        try:
+            val = json.loads(headers)
+            if isinstance(val, str):
+                val = json.loads(val)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+        return {}
+    return headers if isinstance(headers, dict) else {}
+
+
+
 class SessionManager:
     """
     Manages chat sessions with database persistence.
@@ -60,7 +76,7 @@ class SessionManager:
         try:
             db_sessions = db.query(DbSession).filter(
                 DbSession.archived.is_(False),
-                DbSession.message_count > 0,
+                (DbSession.message_count > 0) | (DbSession.name == "[IDE] Workspace Copilot"),
             ).order_by(DbSession.last_accessed.desc()).limit(100).all()
 
             loaded_count = 0
@@ -85,12 +101,7 @@ class SessionManager:
     def _db_to_session_meta(self, db_session: DbSession) -> Optional[Session]:
         """Build a Session with empty history. `get_session` will hydrate
         messages from the DB on first read."""
-        headers = db_session.headers
-        if isinstance(headers, str):
-            try:
-                headers = json.loads(headers)
-            except json.JSONDecodeError:
-                headers = {}
+        headers = parse_db_headers(db_session.headers)
         session = Session(
             id=db_session.id,
             name=db_session.name,
@@ -150,12 +161,7 @@ class SessionManager:
             return None
 
         # Parse headers
-        headers = db_session.headers
-        if isinstance(headers, str):
-            try:
-                headers = json.loads(headers)
-            except json.JSONDecodeError:
-                headers = {}
+        headers = parse_db_headers(db_session.headers)
 
         session = Session(
             id=db_session.id,
@@ -349,12 +355,7 @@ class SessionManager:
             db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
             if db_session is None:
                 return False
-            headers = db_session.headers
-            if isinstance(headers, str):
-                try:
-                    headers = json.loads(headers)
-                except json.JSONDecodeError:
-                    headers = {}
+            headers = parse_db_headers(db_session.headers)
             session.name = db_session.name
             session.endpoint_url = db_session.endpoint_url or ""
             session.model = db_session.model or ""
@@ -588,8 +589,8 @@ class SessionManager:
             for db_session in all_sessions:
                 stats['total_checked'] += 1
 
-                # Delete empty sessions
-                if db_session.message_count == 0:
+                # Delete empty sessions (except system session)
+                if db_session.message_count == 0 and db_session.name != "[IDE] Workspace Copilot":
                     if db_session.id in self.sessions:
                         del self.sessions[db_session.id]
                     db.delete(db_session)

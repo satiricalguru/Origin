@@ -243,7 +243,9 @@ function _setupProviderPrompt() {
 
 /** Persist a message to the current session (fire-and-forget) */
 function _persistMsg(role, content, metadata) {
-  const sid = sessionModule.getCurrentSessionId();
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  const sid = isIdeActive ? localStorage.getItem('origin-ide-session-id') : sessionModule.getCurrentSessionId();
   if (!sid || !content) return;
   const payload = { role, content };
   if (metadata) payload.metadata = metadata;
@@ -255,6 +257,32 @@ function _persistMsg(role, content, metadata) {
 }
 
 function slashReply(text) {
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  
+  if (isIdeActive) {
+    const chatBox = document.getElementById('ide-right-chat-messages');
+    if (!chatBox) return { el: document.createElement('div'), body: document.createElement('div') };
+    const div = document.createElement('div');
+    div.className = 'ide-right-chat-msg assistant';
+    div.innerHTML = text;
+    
+    div.querySelectorAll('pre').forEach(pre => {
+      if (!pre.querySelector('.copy-code')) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'copy-code';
+        btn.setAttribute('data-code', pre.textContent);
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+        pre.appendChild(btn);
+      }
+    });
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+    _persistMsg('assistant', div.textContent, { source: 'slash' });
+    return { el: div, body: div };
+  }
+
   const chatBox = document.getElementById('chat-history');
   const div = document.createElement('div');
   div.className = 'msg msg-ai';
@@ -324,6 +352,41 @@ function _slashFooter(msgEl) {
  */
 function typewriterReply(text, options = {}) {
   return new Promise(resolve => {
+    const ideModal = document.getElementById('ide-modal');
+    const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+    
+    if (isIdeActive) {
+      const chatBox = document.getElementById('ide-right-chat-messages');
+      if (!chatBox) { resolve(null); return; }
+      const div = document.createElement('div');
+      div.className = 'ide-right-chat-msg assistant';
+      div.style.whiteSpace = 'pre-wrap';
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      
+      let i = 0;
+      const interval = Number.isFinite(options.interval) ? Math.max(1, options.interval) : 10;
+      const iv = setInterval(() => {
+        div.textContent = text.slice(0, ++i);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        if (i >= text.length) {
+          clearInterval(iv);
+          if (options.renderMarkdown) {
+            requestAnimationFrame(() => {
+              div.style.whiteSpace = '';
+              div.innerHTML = markdownModule.processWithThinking(markdownModule.squashOutsideCode(text));
+              if (markdownModule.renderMermaid) markdownModule.renderMermaid(div);
+              chatBox.scrollTop = chatBox.scrollHeight;
+            });
+          }
+          div.dataset.raw = text;
+          _persistMsg('assistant', text, { source: 'slash' });
+          resolve(div);
+        }
+      }, interval);
+      return;
+    }
+
     const chatBox = document.getElementById('chat-history');
     const div = document.createElement('div');
     div.className = 'msg msg-ai';
@@ -1050,7 +1113,14 @@ Created: ${s.created_at || '?'}</pre>`);
 }
 
 async function _cmdSessionClear(args, ctx) {
-  document.getElementById('chat-history').innerHTML = '';
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  if (isIdeActive) {
+    const ideChat = document.getElementById('ide-right-chat-messages');
+    if (ideChat) ideChat.innerHTML = '';
+  } else {
+    document.getElementById('chat-history').innerHTML = '';
+  }
   slashReply('Chat display cleared');
   return true;
 }
@@ -4923,6 +4993,20 @@ const _FORTUNES = [
 
 // Easter egg visual helper — renders inside a regular chat bubble
 function _eggRender(html) {
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  
+  if (isIdeActive) {
+    const chatBox = document.getElementById('ide-right-chat-messages');
+    if (!chatBox) return;
+    const div = document.createElement('div');
+    div.className = 'ide-right-chat-msg assistant';
+    div.innerHTML = html;
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+    return;
+  }
+  
   const chatBox = document.getElementById('chat-history');
   const div = document.createElement('div');
   div.className = 'msg msg-ai';
@@ -4950,13 +5034,23 @@ async function _cmdFlip(args, ctx) {
     coin.style.animation = 'none'; coin.offsetHeight; coin.style.animation = 'egg-spin 0.6s ease-out';
     coin.textContent = r ? 'H' : 'T'; coin.title = r ? 'Heads' : 'Tails';
   });
-  const chatBox = document.getElementById('chat-history');
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  const chatBox = isIdeActive ? document.getElementById('ide-right-chat-messages') : document.getElementById('chat-history');
+  if (!chatBox) return true;
   const wrap = document.createElement('div');
+  if (isIdeActive) {
+    wrap.className = 'ide-right-chat-msg assistant';
+  }
   wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:6px;';
   wrap.appendChild(coin);
   if (edge) { const lbl = document.createElement('div'); lbl.style.cssText='font-size:0.8em;opacity:0.5;';lbl.textContent='The coin landed on its edge.';wrap.appendChild(lbl); }
   chatBox.appendChild(wrap);
-  uiModule.scrollHistory();
+  if (isIdeActive) {
+    chatBox.scrollTop = chatBox.scrollHeight;
+  } else {
+    uiModule.scrollHistory();
+  }
   // Inject keyframes if not present
   if (!document.getElementById('egg-styles')) {
     const s = document.createElement('style');
@@ -5054,9 +5148,15 @@ async function _cmdAscii(args, ctx) {
 }
 
 async function _cmdMatrix(args, ctx) {
-  const chatBox = document.getElementById('chat-history');
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  const chatBox = isIdeActive ? document.getElementById('ide-right-chat-messages') : document.getElementById('chat-history');
+  if (!chatBox) return true;
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:8px 0;display:flex;justify-content:center;';
+  if (isIdeActive) {
+    wrap.className = 'ide-right-chat-msg assistant';
+  }
   const canvas = document.createElement('canvas');
   canvas.width = 400; canvas.height = 180;
   canvas.style.cssText = 'border-radius:4px;background:#000;max-width:100%;';
@@ -5086,7 +5186,11 @@ async function _cmdMatrix(args, ctx) {
       c.fillText('Wake up, Neo...', canvas.width/2 - 70, canvas.height/2);
     }
   }, 50);
-  uiModule.scrollHistory();
+  if (isIdeActive) {
+    chatBox.scrollTop = chatBox.scrollHeight;
+  } else {
+    uiModule.scrollHistory();
+  }
   return true;
 }
 
@@ -5209,9 +5313,11 @@ async function _cmdProbe(args, ctx) {
 
   slashReply('<span style="opacity:0.5">Probing models... this may take a while.</span>');
   // Get reference to the message we just added so we can update it live
-  const chatBox = document.getElementById('chat-history');
+  const ideModal = document.getElementById('ide-modal');
+  const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+  const chatBox = isIdeActive ? document.getElementById('ide-right-chat-messages') : document.getElementById('chat-history');
   const msgEl = chatBox ? chatBox.lastElementChild : null;
-  const bodyEl = msgEl ? msgEl.querySelector('.body') : null;
+  const bodyEl = msgEl ? (isIdeActive ? msgEl : msgEl.querySelector('.body')) : null;
   if (!bodyEl) return true;
 
   let html = '<div style="font-family:inherit;font-size:0.9em">';
@@ -5924,7 +6030,26 @@ async function handleSlashCommand(input) {
   let args = parts.slice(1);
   const ctx = _makeCtx();
   let _userShown = false;
-  function _showUser() { if (!_userShown) { _userShown = true; _addMessage('user', input); _persistMsg('user', input); } }
+  function _showUser() {
+    if (!_userShown) {
+      _userShown = true;
+      const ideModal = document.getElementById('ide-modal');
+      const isIdeActive = ideModal && !ideModal.classList.contains('hidden');
+      if (isIdeActive) {
+        const container = document.getElementById('ide-right-chat-messages');
+        if (container) {
+          const el = document.createElement('div');
+          el.className = 'ide-right-chat-msg user';
+          el.textContent = input;
+          container.appendChild(el);
+          container.scrollTop = container.scrollHeight;
+        }
+      } else {
+        _addMessage('user', input);
+      }
+      _persistMsg('user', input);
+    }
+  }
 
   try {
     // --- Check for --help / -h on any command ---
@@ -6107,7 +6232,33 @@ export function clearSetupMode(preservePendingState = false) {
   }
 }
 
-export { handleSlashCommand, handleSetupInput, handleSetupWizard, slashReply, typewriterReply, _ALIAS_MAP };
+export function getAutocompleteCommands() {
+  const keys = new Set();
+  for (const k of Object.keys(_ALIAS_MAP || {})) {
+    keys.add(k);
+  }
+  for (const k of Object.keys(LEGACY_ALIASES || {})) {
+    keys.add(k);
+  }
+  return Array.from(keys).sort();
+}
+
+export function getCommandHelp(cmdName) {
+  if (LEGACY_ALIASES && LEGACY_ALIASES[cmdName]) {
+    const leg = LEGACY_ALIASES[cmdName];
+    const cmdDef = COMMANDS[leg.parent];
+    if (cmdDef && cmdDef.subs && cmdDef.subs[leg.sub]) {
+      return cmdDef.subs[leg.sub].help || '';
+    }
+  }
+  const canonical = _ALIAS_MAP && _ALIAS_MAP[cmdName];
+  if (canonical && COMMANDS[canonical]) {
+    return COMMANDS[canonical].help || '';
+  }
+  return '';
+}
+
+export { handleSlashCommand, handleSetupInput, handleSetupWizard, slashReply, typewriterReply, _ALIAS_MAP, COMMANDS };
 
 const slashCommands = {
   initSlashCommands,
@@ -6120,6 +6271,8 @@ const slashCommands = {
   slashReply,
   typewriterReply,
   typewriterInto,
+  getAutocompleteCommands,
+  getCommandHelp,
 };
 
 export default slashCommands;

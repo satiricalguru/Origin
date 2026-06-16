@@ -13,7 +13,7 @@ __all__ = [
     "DEFAULT_TEMPERATURE", "DEFAULT_MAX_TOKENS",
 ]
 
-APP_VERSION = "0.9.1"
+APP_VERSION = "1.0.1"
 
 # Base paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/"

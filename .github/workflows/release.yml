@@ -1,0 +1,159 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"          # triggers on: git tag v1.0.0 && git push --tags
+
+permissions:
+  contents: write     # needed to create GitHub Releases and upload assets
+
+jobs:
+  # ────────────────────────────────────────────────
+  # macOS: build Origin.app + Origin.dmg
+  # ────────────────────────────────────────────────
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build DMG
+        run: |
+          chmod +x build-macos-app.sh
+          ./build-macos-app.sh
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/Origin.dmg
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────
+  # Windows: build Origin-Setup.exe via NSIS
+  # ────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: choco install nsis --yes --no-progress
+        shell: powershell
+
+      - name: Create dist directory
+        run: New-Item -ItemType Directory -Force -Path dist
+        shell: powershell
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart('v')
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+        shell: powershell
+
+      - name: Build installer
+        run: |
+          makensis `
+            /DAPP_VERSION=${{ steps.version.outputs.VERSION }} `
+            installer\windows\origin.nsi
+        shell: powershell
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/Origin-Setup.exe
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────
+  # Create GitHub Release and attach both assets
+  # ────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for release notes)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download macOS DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: release-assets/
+
+      - name: Download Windows EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: release-assets/
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ github.ref_name }}"
+          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes from CHANGELOG / commits
+        id: notes
+        run: |
+          # Use git log since the previous tag (or all commits for first release)
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+          COMMITS=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges | head -30)
+          cat <<EOF > notes.md
+          ## Origin ${{ github.ref_name }}
+
+          ### What's New
+          ${COMMITS}
+
+          ---
+
+          ### Installation
+
+          #### macOS
+          1. Download **Origin.dmg**
+          2. Open the DMG and drag **Origin** to your Applications folder
+          3. Double-click Origin in Applications to start the server
+
+          > **First run:** macOS may show a security warning. Right-click → Open to bypass Gatekeeper.
+
+          #### Windows
+          1. Download **Origin-Setup.exe**
+          2. Run the installer (admin rights required)
+          3. Launch Origin from the Start Menu or Desktop shortcut
+
+          > **Requirement:** Python 3.11+ must be installed from [python.org](https://www.python.org/downloads/) (check "Add to PATH").
+
+          ---
+
+          ### Requirements
+          - **macOS 11+** (Apple Silicon or Intel) — Homebrew required
+          - **Windows 10/11** — Python 3.11+ required
+          EOF
+          echo "NOTES_FILE=notes.md" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Origin ${{ github.ref_name }}"
+          body_path: notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/Origin.dmg
+            release-assets/Origin-Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

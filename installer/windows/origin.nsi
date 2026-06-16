@@ -136,11 +136,11 @@ Section "Origin (required)" SecMain
 
     ; Start Menu shortcuts
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "powershell.exe" "-ExecutionPolicy Bypass -WindowStyle Hidden -File \"$INSTDIR/launch-windows.ps1\""
+    CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "powershell.exe" "-ExecutionPolicy Bypass -WindowStyle Hidden -File $INSTDIR/launch-windows.ps1"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
 
     ; Desktop shortcut
-    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "powershell.exe" "-ExecutionPolicy Bypass -WindowStyle Hidden -File \"$INSTDIR/launch-windows.ps1\""
+    CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "powershell.exe" "-ExecutionPolicy Bypass -WindowStyle Hidden -File $INSTDIR/launch-windows.ps1"
 
 SectionEnd
 
@@ -148,7 +148,7 @@ SectionEnd
 ;  Launch function
 ; ============================================================
 Function LaunchApp
-    ExecShell "" "powershell.exe" "-ExecutionPolicy Bypass -File \"$INSTDIR/launch-windows.ps1\""
+    ExecShell "" "powershell.exe" "-ExecutionPolicy Bypass -File $INSTDIR/launch-windows.ps1"
 FunctionEnd
 
 ; ============================================================

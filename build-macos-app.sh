@@ -70,10 +70,31 @@ PLIST
 cat > "$APP/Contents/MacOS/$APP_NAME.tmpl" <<'LAUNCHER'
 #!/bin/bash
 # Origin.app — start the local server and open the UI in an app window.
-INSTALL_DIR="__INSTALL_DIR__"
 PORT="__PORT__"
 URL="http://127.0.0.1:${PORT}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# Detect install dir: look for venv relative to this script's location.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SEARCH_DIRS=(
+  "$SCRIPT_DIR/../../../.."                    # inside .app in repo
+  "$HOME/Origin"                               # ~/Origin
+  "$HOME/Documents/Origin"                     # ~/Documents/Origin
+  "$HOME/Desktop/Origin"                       # ~/Desktop/Origin
+  "/opt/Origin"                                # /opt/Origin
+  "/usr/local/Origin"                          # /usr/local/Origin
+)
+INSTALL_DIR=""
+for d in "${SEARCH_DIRS[@]}"; do
+  if [ -x "$d/venv/bin/uvicorn" ]; then
+    INSTALL_DIR="$d"
+    break
+  fi
+done
+if [ -z "$INSTALL_DIR" ]; then
+  # Fallback: use script-relative path (works when .app is inside the repo)
+  INSTALL_DIR="$SCRIPT_DIR/../../../.."
+fi
 
 UVICORN="$INSTALL_DIR/venv/bin/uvicorn"
 LOG="$INSTALL_DIR/logs/origin-app.log"
@@ -87,7 +108,7 @@ die_gui() {
 [ -x "$UVICORN" ] || die_gui "Origin isn't set up yet. Open Terminal and run:
 
 cd $INSTALL_DIR
-python3.11 -m venv venv
+python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ./venv/bin/python setup.py"
 
@@ -142,7 +163,7 @@ fi
 wait "$SERVER_PID"
 LAUNCHER
 
-sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" -e "s|__PORT__|$PORT|g" \
+sed -e "s|__PORT__|$PORT|g" \
     "$APP/Contents/MacOS/$APP_NAME.tmpl" > "$APP/Contents/MacOS/$APP_NAME"
 rm -f "$APP/Contents/MacOS/$APP_NAME.tmpl"
 chmod +x "$APP/Contents/MacOS/$APP_NAME"

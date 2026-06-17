@@ -10,35 +10,10 @@ permissions:
 
 jobs:
   # ────────────────────────────────────────────────
-  # macOS: build Origin.app + Origin.dmg (Intel)
-  # ────────────────────────────────────────────────
-  build-macos-intel:
-    name: Build macOS DMG (Intel)
-    runs-on: macos-13
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build DMG
-        run: |
-          chmod +x build-macos-app.sh
-          ./build-macos-app.sh
-
-      - name: Rename DMG
-        run: mv dist/Origin.dmg dist/Origin-Intel.dmg
-
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-dmg-intel
-          path: dist/Origin-Intel.dmg
-          if-no-files-found: error
-
-  # ────────────────────────────────────────────────
   # macOS: build Origin.app + Origin.dmg (ARM64)
   # ────────────────────────────────────────────────
-  build-macos-arm:
-    name: Build macOS DMG (ARM64)
+  build-macos:
+    name: Build macOS DMG
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -49,14 +24,11 @@ jobs:
           chmod +x build-macos-app.sh
           ./build-macos-app.sh
 
-      - name: Rename DMG
-        run: mv dist/Origin.dmg dist/Origin-ARM64.dmg
-
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg-arm
-          path: dist/Origin-ARM64.dmg
+          name: macos-dmg
+          path: dist/Origin.dmg
           if-no-files-found: error
 
   # ────────────────────────────────────────────────
@@ -126,7 +98,7 @@ jobs:
   # ────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build-macos-intel, build-macos-arm, build-windows]
+    needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for release notes)
@@ -134,16 +106,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download macOS DMG (Intel)
+      - name: Download macOS DMG
         uses: actions/download-artifact@v4
         with:
-          name: macos-dmg-intel
-          path: release-assets/
-
-      - name: Download macOS DMG (ARM64)
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg-arm
+          name: macos-dmg
           path: release-assets/
 
       - name: Download Windows EXE
@@ -170,8 +136,8 @@ jobs:
 
           ### Installation
 
-          #### macOS
-          1. Download **Origin-Intel.dmg** (Intel) or **Origin-ARM64.dmg** (Apple Silicon)
+          #### macOS (Apple Silicon)
+          1. Download **Origin.dmg**
           2. Open the DMG and drag **Origin** to Applications
           3. Double-click Origin to start — it will open in your browser
 
@@ -199,8 +165,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            release-assets/Origin-Intel.dmg
-            release-assets/Origin-ARM64.dmg
+            release-assets/Origin.dmg
             release-assets/Origin-Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

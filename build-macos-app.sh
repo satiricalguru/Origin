@@ -27,13 +27,14 @@ echo "  port:        $PORT"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# ── Icon (best effort) — center-crop docs/origin.jpg to a square .icns ──
-if [ -f "$REPO_DIR/docs/origin.jpg" ] && command -v sips >/dev/null 2>&1; then
+# ── Icon (best effort) — center-crop to a square .icns ──
+ICON_SRC=""
+for f in "$REPO_DIR/docs/origin.png" "$REPO_DIR/docs/origin.jpg"; do
+  [ -f "$f" ] && ICON_SRC="$f" && break
+done
+if [ -n "$ICON_SRC" ] && command -v sips >/dev/null 2>&1; then
   TMPIMG="$(mktemp -d)"
-  # Center-crop to a square, scale to 512 (sips' icns encoder caps at 512), and
-  # let sips emit the .icns directly — more robust across macOS versions than
-  # building an .iconset by hand.
-  sips -c 720 720 "$REPO_DIR/docs/origin.jpg" --out "$TMPIMG/sq.png" >/dev/null 2>&1 || cp "$REPO_DIR/docs/origin.jpg" "$TMPIMG/sq.png"
+  sips -c 720 720 "$ICON_SRC" --out "$TMPIMG/sq.png" >/dev/null 2>&1 || cp "$ICON_SRC" "$TMPIMG/sq.png"
   sips -z 512 512 "$TMPIMG/sq.png" --out "$TMPIMG/icon.png" >/dev/null 2>&1
   if sips -s format icns "$TMPIMG/icon.png" --out "$APP/Contents/Resources/origin.icns" >/dev/null 2>&1; then
     echo "  icon:        origin.icns"
@@ -42,7 +43,7 @@ if [ -f "$REPO_DIR/docs/origin.jpg" ] && command -v sips >/dev/null 2>&1; then
   fi
   rm -rf "$TMPIMG"
 else
-  echo "  icon:        (skipped — no docs/origin.jpg)"
+  echo "  icon:        (skipped — no docs/origin.png)"
 fi
 
 # ── Info.plist ──

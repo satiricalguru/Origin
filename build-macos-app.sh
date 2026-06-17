@@ -93,7 +93,6 @@ for d in "${SEARCH_DIRS[@]}"; do
   fi
 done
 if [ -z "$INSTALL_DIR" ]; then
-  # Fallback: use script-relative path (works when .app is inside the repo)
   INSTALL_DIR="$SCRIPT_DIR/../../../.."
 fi
 
@@ -123,6 +122,7 @@ open_ui() {
         bin="$base/$b.app/Contents/MacOS/$exe"
         if [ -x "$bin" ]; then
           "$bin" --app="$URL" --new-window >/dev/null 2>&1 &
+          disown
           return 0
         fi
       fi
@@ -133,7 +133,7 @@ open_ui() {
 
 mkdir -p "$INSTALL_DIR/logs"
 
-# Already running? Just open the UI.
+# Already running? Just open the UI and exit immediately.
 if /usr/bin/curl -s -o /dev/null --max-time 2 "$URL"; then
   open_ui
   exit 0
@@ -161,7 +161,12 @@ if [ "$READY" = "1" ]; then
 else
   notify "Origin is taking a while — open $URL once it finishes starting."
 fi
-wait "$SERVER_PID"
+
+# Detach from terminal so the app doesn't block in the dock.
+# The server runs in background; re-opened instances just detect it and exit.
+wait "$SERVER_PID" 2>/dev/null &
+disown
+exit 0
 LAUNCHER
 
 sed -e "s|__PORT__|$PORT|g" \
